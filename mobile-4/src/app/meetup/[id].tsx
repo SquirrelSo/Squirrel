@@ -3,7 +3,7 @@
  * check in, and optionally ask the backend to notify your safety contact. We only say a notification
  * was sent when the API returns status "sent". What you can do is campus-service's rule
  * (logic/meetups meetupActions); a decline waits DECLINE_UNDO_MS before it's sent, so Undo never
- * needs the server (a lone guest's decline cancels the meetup there, and that can't be taken back).
+ * needs the server (once sent, only the host is told; a declined guest can still accept later).
  */
 import { useState } from 'react';
 import { StyleSheet, Switch, Text, View } from 'react-native';

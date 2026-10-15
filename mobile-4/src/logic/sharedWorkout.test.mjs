@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyReps, clock, livePhase, partnerLeftMidRace, raceResult, screenPhase, secondsUntil, sessionSocketUrl, startSessionLink, POLL_EVERY_MS } from './sharedWorkout.ts';
+import { applyCancelled, applyInvited, applyReps, canCancel, clock, inviteRefusal, inviteStatus, livePhase, myCompletedResult, partnerLeftMidRace, pendingInvites, raceResult, screenPhase, secondsUntil, sessionSocketUrl, startSessionLink, POLL_EVERY_MS } from './sharedWorkout.ts';
 
 const T0 = Date.parse('2026-10-05T10:00:00.000Z');
 const iso = (ms) => new Date(T0 + ms).toISOString();
@@ -69,6 +69,64 @@ test('rep events keep only newer seqs, for the right person and session', () => 
   assert.equal(applyReps(s, { session_id: 's1', user_id: 'u-p', reps: 9, seq: 14, at: iso(1) }).partner.reps, 9);
 });
 
+const buddy = (id, status = 'invited') => ({ user: { user_id: id, display_name: 'Riya Das', avatar_url: null, hostel: null }, status, invited_at: iso(1) });
+
+test('cancelled before the start is its own state, for the host and the partner alike', () => {
+  const cancelled = session({ phase: 'finished', partner: seat('partner', 'u-p', { left_reason: 'cancelled', left_at: iso(5) }), host: seat('host', 'u-host', { left_reason: 'cancelled', left_at: iso(5) }) });
+  assert.equal(screenPhase(cancelled, T0 + 10), 'cancelled');
+  assert.equal(screenPhase({ ...cancelled, you: 'partner' }, T0 + 10), 'cancelled');
+});
+
+test('only the host cancels, and only in the lobby before the countdown', () => {
+  assert.equal(canCancel(session(), T0), true);
+  assert.equal(canCancel(session({ partner: seat('partner', 'u-p') }), T0), true);
+  assert.equal(canCancel(session({ you: 'partner', partner: seat('partner', 'u-p') }), T0), false);
+  assert.equal(canCancel(session(), T0 + 600_000), false); // expired
+  assert.equal(canCancel(racing({ phase: 'countdown', starts_at: iso(3_000) }), T0), false);
+});
+
+test('workout.session.cancelled closes every seat that was still in, "cancelled"', () => {
+  const s = session({ partner: seat('partner', 'u-p', { ready: true }) });
+  const out = applyCancelled(s, { session_id: 's1', at: iso(9) });
+  assert.equal(out.phase, 'finished');
+  assert.deepEqual([out.host.left_reason, out.partner.left_reason, out.partner.ready, out.host.left_at], ['cancelled', 'cancelled', false, iso(9)]);
+  assert.equal(screenPhase(out, T0 + 10), 'cancelled');
+  assert.equal(applyCancelled(s, { session_id: 'other', at: iso(9) }), s);
+  const started = racing();
+  assert.equal(applyCancelled(started, { session_id: 's1', at: iso(9) }), started); // a race is never cancelled
+});
+
+test('invitations: added or updated by workout.session.invited, read per buddy, case-blind', () => {
+  const s = session({ invites: [buddy('AAAA-1', 'declined')] });
+  assert.equal(inviteStatus(s, 'aaaa-1'), 'declined');
+  assert.equal(inviteStatus(s, 'bbbb-2'), null);
+  assert.equal(inviteStatus(session(), 'bbbb-2'), null); // older servers send no invites at all
+  const more = applyInvited(s, { session_id: 's1', invite: buddy('bbbb-2') });
+  assert.equal(inviteStatus(more, 'BBBB-2'), 'invited');
+  assert.equal(pendingInvites(more), 1);
+  assert.equal(applyInvited(more, { session_id: 's1', invite: buddy('bbbb-2') }).invites.length, 2);
+  assert.equal(applyInvited(s, { session_id: 'other', invite: buddy('cccc-3') }), s);
+});
+
+test('each invite refusal says what happened; anything else is the server\'s message', () => {
+  assert.match(inviteRefusal('not_a_buddy', 'x'), /Partner Hunt connections/);
+  assert.match(inviteRefusal('too_many_invites', 'x'), /Up to 3/);
+  assert.equal(inviteRefusal('session_full', 'x'), 'Someone has already joined.');
+  assert.equal(inviteRefusal('blocks_unreachable', 'Try again in a moment.'), 'Try again in a moment.');
+});
+
+test('the settled race: your own line, matched by your Social profile id; nothing when it isn\'t this race', () => {
+  const done = racing({ phase: 'finished', you: 'partner' });
+  const c = { session_id: 's1', completed_at: iso(240_000), results: [
+    { user: done.host.user, reps: 12, finished: true, rewarded: true },
+    { user: done.partner.user, reps: 0, finished: true, rewarded: false },
+  ] };
+  assert.equal(myCompletedResult(done, c).rewarded, false);
+  assert.equal(myCompletedResult({ ...done, you: 'host' }, c).rewarded, true);
+  assert.equal(myCompletedResult(done, { ...c, session_id: 'other' }), null);
+  assert.equal(myCompletedResult(done, null), null);
+});
+
 test('timers and the socket address', () => {
   assert.equal(secondsUntil(iso(2_100), T0), 3);
   assert.equal(secondsUntil(iso(0), T0 + 5), 0);
@@ -116,9 +174,12 @@ test('socket up: messages flow, pings every 10 s, no polling', async () => {
   assert.equal(h.states.at(-1), 'live');
   ws.onmessage({ data: JSON.stringify({ type: 'workout.session.updated', data: session({ phase: 'countdown' }) }) });
   ws.onmessage({ data: JSON.stringify({ type: 'workout.reps.updated', data: { session_id: 's1', user_id: 'u-p', reps: 3, seq: 4, at: iso(1) } }) });
+  ws.onmessage({ data: JSON.stringify({ type: 'workout.session.invited', data: { session_id: 's1', invite: buddy('aaaa-1') } }) });
+  ws.onmessage({ data: JSON.stringify({ type: 'workout.session.cancelled', data: { session_id: 's1', at: iso(1) } }) });
+  ws.onmessage({ data: JSON.stringify({ type: 'workout.session.completed', data: { session_id: 's1', completed_at: iso(1), results: [] } }) });
   ws.onmessage({ data: JSON.stringify({ type: 'pong', data: { server_time: iso(1) } }) });
   ws.onmessage({ data: 'not json' });
-  assert.deepEqual(h.updates.map((u) => u.kind), ['session', 'reps']);
+  assert.deepEqual(h.updates.map((u) => u.kind), ['session', 'reps', 'invited', 'cancelled', 'completed']);
   await h.fire(10_000);
   assert.deepEqual(ws.sent, ['{"type":"ping"}']);
   assert.ok(![...h.timers.values()].some((t) => t.ms === POLL_EVERY_MS));

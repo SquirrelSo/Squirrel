@@ -1,14 +1,15 @@
 /**
  * PARTNER HUNT · ONE CARD — passed in from the board or a request list by its card_id (Exercise has
  * no route for a single card; opened cold, the card is found again in those lists). Connect asks them;
- * Block is a real Social block. Where you stand with them comes from GET …/requests.
+ * Block is a real Social block; once connected, Remove buddy ends it silently. Where you stand with
+ * them comes from GET …/requests.
  */
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { errorCode, errorText } from '@/api/campus';
 import { errorDetail, partnerHuntApi } from '@/api/partnerHunt';
-import { PersonCard } from '@/components/partnerHunt/Parts';
+import { PersonCard, RemoveBuddy } from '@/components/partnerHunt/Parts';
 import { EmptyNote, LoadingRows } from '@/components/campus/States';
 import { Button, Card, Display, Header, Kicker, Screen, tap } from '@/components/ui';
 import { invalidatePartnerHunt, usePartnerHuntUser, usePartnerMatches, usePartnerRequests, usePartnerStatus } from '@/hooks/usePartnerHunt';
@@ -96,7 +97,10 @@ export default function Buddy() {
           )}
 
           {connection ? (
-            <Button label="Open their profile" iconLeft="account-circle" onPress={() => router.push({ pathname: '/user/[id]', params: { id: connection.person.social_profile_id } })} />
+            <>
+              <Button label="Open their profile" iconLeft="account-circle" onPress={() => router.push({ pathname: '/user/[id]', params: { id: connection.person.social_profile_id } })} />
+              {userId && <RemoveBuddy userId={userId} connection={connection} />}
+            </>
           ) : incoming ? (
             <Button label="They asked you — answer" iconLeft="handshake-outline" onPress={() => router.push({ pathname: '/partner-hunt/connect/[id]', params: { id: incoming.request_id } })} />
           ) : outgoing ? (

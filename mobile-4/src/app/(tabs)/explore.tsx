@@ -187,6 +187,16 @@ export default function MapScreen() {
             <Icon name="fire" size={14} color={heatOn ? colors.secondary : colors.sub} />
             <Text style={[styles.chipText, heatOn && { color: colors.secondary }]}>Heat</Text>
           </Pressable>
+          <View style={styles.chipGap} />
+          {/* Discover and your bubble: their own screens, the map stays as it is */}
+          <Pressable onPress={() => { tap(); router.push('/discover'); }} style={styles.chip} accessibilityRole="button" accessibilityLabel="Discover">
+            <Icon name="compass-outline" size={14} color={colors.sub} />
+            <Text style={styles.chipText}>Discover</Text>
+          </Pressable>
+          <Pressable onPress={() => { tap(); router.push('/bubble'); }} style={styles.chip} accessibilityRole="button" accessibilityLabel="Your bubble">
+            <Icon name="map-marker-radius-outline" size={14} color={colors.sub} />
+            <Text style={styles.chipText}>Bubble</Text>
+          </Pressable>
         </ScrollView>
       )}
 

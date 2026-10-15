@@ -8,6 +8,7 @@
     service.py   the use cases, with Social's blocks and names
     router.py    /api/workout-sessions/* and /ws/workout-sessions/{id}
 
-Owned by Exercise (ADR-032). Reps are hand-tapped in this version, so nothing here awards XP or
-writes an activity: the race result is shown and that is all.
+Owned by Exercise (ADR-032). Reps are hand-tapped in this version, so nothing is written to
+activity_sessions and nothing is earned per rep: a finished race earns each finishing player one
+flat shared_workout_finished award from the Run Module, settled once per session (service.py).
 """

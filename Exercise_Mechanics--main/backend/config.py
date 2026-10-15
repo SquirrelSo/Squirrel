@@ -19,7 +19,6 @@ USERS_DIR        = _REPO_ROOT / "data" / "users"
 PROFILE_FILENAME = "profile.json"
 SKILL_FILENAME   = "skill.json"   # the user's chosen skill level (set on the dashboard)
 
-
 # Moderation reports are not any one user's data, so they live apart from the user directories.
 REPORTS_DIR      = _REPO_ROOT / "data" / "moderation" / "reports"
 
@@ -28,11 +27,9 @@ SHARED_WORKOUTS_DIR = _REPO_ROOT / "data" / "shared_workouts"
 # Partner Hunt Connect requests without DATABASE_URL: one file for everyone's requests.
 PARTNER_REQUESTS_FILE = _REPO_ROOT / "data" / "partner_hunt" / "requests.json"
 
-
 def user_dir(user_id: str) -> Path:
     """Absolute path to a single user's directory under USERS_DIR."""
     return USERS_DIR / user_id
-
 
 # --- Squirrel Social: auth, nearby discovery, deep links ----------------------
 # Everything below is read through this module at call time (e.g. `config.AUTH_DIR`) so tests can
@@ -70,10 +67,8 @@ ANDROID_CERT_SHA256      = [s for s in os.environ.get("SQUIRREL_ANDROID_CERT_SHA
 # coach, which has no sign-in yet, can still be used on a development machine.
 REQUIRE_AUTH_ENV = "EXERCISE_REQUIRE_AUTH"
 
-
 def auth_required() -> bool:
-    return os.environ.get(REQUIRE_AUTH_ENV, "").strip().lower() not in ("0", "false", "no", "off")
-
+   return os.environ.get(REQUIRE_AUTH_ENV, "").strip().lower() not in ("0", "false", "no", "off")
 
 # Sign-up is open only to these email domains (SQUIRREL_ALLOWED_EMAIL_DOMAINS, comma-separated; a
 # subdomain of one counts too). "*" allows any address. By default any Indian academic address
@@ -81,18 +76,15 @@ def auth_required() -> bool:
 ALLOWED_EMAIL_DOMAINS_ENV = "SQUIRREL_ALLOWED_EMAIL_DOMAINS"
 DEFAULT_ALLOWED_EMAIL_DOMAINS = "ac.in"
 
-
 def allowed_email_domains() -> tuple[str, ...] | None:
-    """The allowed domains, or None when any address may sign up."""
-    raw = os.environ.get(ALLOWED_EMAIL_DOMAINS_ENV, DEFAULT_ALLOWED_EMAIL_DOMAINS)
-    domains = tuple(d.strip().lower().lstrip("@") for d in raw.split(",") if d.strip())
-    return None if not domains or "*" in domains else domains
-
+   """The allowed domains, or None when any address may sign up."""
+   raw = os.environ.get(ALLOWED_EMAIL_DOMAINS_ENV, DEFAULT_ALLOWED_EMAIL_DOMAINS)
+   domains = tuple(d.strip().lower().lstrip("@") for d in raw.split(",") if d.strip())
+   return None if not domains or "*" in domains else domains
 
 # A new account needs the 6-digit code emailed to its address (auth/email_codes.py). On unless
 # SQUIRREL_EMAIL_VERIFICATION is 0/false/no/off (local development and older tests).
 EMAIL_VERIFICATION_ENV = "SQUIRREL_EMAIL_VERIFICATION"
 
-
 def email_verification_required() -> bool:
-    return os.environ.get(EMAIL_VERIFICATION_ENV, "").strip().lower() not in ("0", "false", "no", "off")
+   return os.environ.get(EMAIL_VERIFICATION_ENV, "").strip().lower() not in ("0", "false", "no", "off")

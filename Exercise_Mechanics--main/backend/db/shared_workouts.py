@@ -65,6 +65,18 @@ def open_for(user_id: str, now: datetime) -> list[object]:
     return [row[0] for row in rows]
 
 
+def due_for_completion(now: datetime, limit: int) -> list[object]:
+    """Documents of started races past closes_at that were never settled (completed_at present and
+    null; documents from before settling existed have no such key and are left alone)."""
+    with pooled() as conn:
+        rows = conn.execute(
+            "SELECT doc FROM shared_workout_sessions WHERE closes_at <= %s "
+            "AND jsonb_typeof(doc->'completed_at') = 'null' AND jsonb_typeof(doc->'starts_at') = 'string' "
+            "ORDER BY closes_at LIMIT %s",
+            (now, limit)).fetchall()
+    return [row[0] for row in rows]
+
+
 def delete_closed_before(cutoff: datetime) -> int:
     with pooled() as conn:
         return conn.execute("DELETE FROM shared_workout_sessions WHERE closes_at < %s", (cutoff,)).rowcount

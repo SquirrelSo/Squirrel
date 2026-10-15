@@ -11,11 +11,14 @@
  *   POST   …/partner-hunt/requests/{id}/accept              → Connection
  *   POST   …/partner-hunt/requests/{id}/decline             → 204 (silent)
  *   DELETE …/partner-hunt/requests/{id}                     → 204 (the sender takes it back)
+ *   DELETE …/partner-hunt/connections/{id}                  → 204 remove a buddy (silent; 30-day cooldown)
  *
  * Cards are anonymous until both say yes: a first name and last initial, an age band, and an opaque
  * per-viewer `card_id` (never shown, never a user id). A Connection adds `social_profile_id`.
  * Errors: { detail: { code, message, …extras } }; errorCode() (api/campus) reads the code.
+ * Removing a buddy is gated by the 'buddyRemove' capability (api/availability.ts).
  */
+import { gateEndpoints } from '@/api/availability';
 import { api, ApiError } from '@/api/client';
 import { EXERCISE_API_CONFIGURED, EXERCISE_API_URL } from '@/api/config';
 
@@ -72,7 +75,7 @@ const call = <T,>(userId: string, path: string, init: { method?: 'GET' | 'POST' 
   api<T>(`/api/users/${encodeURIComponent(userId)}/partner-hunt${path}`, { base: EXERCISE_API_URL, method: init.method ?? (init.body !== undefined ? 'POST' : 'GET'), body: init.body });
 const rid = encodeURIComponent;
 
-export const partnerHuntApi = {
+export const partnerHuntApi = gateEndpoints({
   status: (userId: string) => call<PartnerStatus>(userId, ''),
   savePreferences: (userId: string, prefs: PartnerPreferences) => call<PartnerPreferences>(userId, '/preferences', { method: 'PUT', body: prefs }),
   matches: (userId: string) => call<{ min_xp: number; matches: BoardCard[] }>(userId, '/matches'),
@@ -82,7 +85,11 @@ export const partnerHuntApi = {
   accept: (userId: string, requestId: string) => call<PartnerConnection>(userId, `/requests/${rid(requestId)}/accept`, { body: {} }),
   decline: (userId: string, requestId: string) => call<void>(userId, `/requests/${rid(requestId)}/decline`, { body: {} }),
   withdraw: (userId: string, requestId: string) => call<void>(userId, `/requests/${rid(requestId)}`, { method: 'DELETE' }),
-};
+  /** `requestId` is the connection's request_id. */
+  removeConnection: (userId: string, requestId: string) => call<void>(userId, `/connections/${rid(requestId)}`, { method: 'DELETE' }),
+}, {
+  removeConnection: { capability: 'buddyRemove' },
+});
 
 /** Extras Exercise puts beside the code: min_xp / xp (xp_locked), request_id (already_requested, they_asked_you), retry_after (too_soon). */
 export function errorDetail(e: unknown): Record<string, unknown> {

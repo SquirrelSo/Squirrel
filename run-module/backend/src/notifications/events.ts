@@ -1,7 +1,9 @@
 export type NotificationType =
   | 'territory_captured'
   | 'territory_lost'
-  | 'territory_expired';
+  | 'territory_expired'
+  /** The user reached a new XP level (ADR-033). Payload: { level, xp, dedupe_key }. */
+  | 'xp.level_up';
 
 export interface NotificationEvent {
   id: string;

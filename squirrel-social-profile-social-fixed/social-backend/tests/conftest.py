@@ -70,6 +70,12 @@ class FakeRunModule:
         # POST /internal/v1/xp/totals (other people's XP, service token): False = unreachable.
         self.totals_available = True
         self.totals_calls: list[list[str]] = []
+        # POST /internal/v1/xp/award and /reverse (ambassador rewards): every call, and the ledger.
+        self.awards: list[dict] = []
+        self.reversals: list[dict] = []
+        self.awarded: dict[str, tuple[str, int]] = {}
+        self.reversed: set[str] = set()
+        self.award_available = True
 
     @staticmethod
     def _sub(token: str) -> str:
@@ -106,6 +112,32 @@ class FakeRunModule:
         entries = [{"rank": i + 1, "user_id": sub, "xp": xp} for i, (sub, xp) in enumerate(ranked)]
         me = next((e for e in entries if e["user_id"] == self._sub(token)), None)
         return {"window": window, "day": "2026-09-29", "entries": entries[:limit], "me": me}
+
+    def award_xp(self, service_token: str, subject: str, amount: int, reason: str, idempotency_key: str, *,
+                 source_id: str | None = None, metadata: dict | None = None) -> int | None:
+        """POST /internal/v1/xp/award: idempotent on the key, like the Run Module."""
+        assert service_token == "svc-secret"
+        self.awards.append({"subject": subject, "amount": amount, "reason": reason, "source": "social",
+                            "idempotency_key": idempotency_key, "source_id": source_id})
+        if not self.award_available:
+            return None
+        if idempotency_key not in self.awarded:
+            self.awarded[idempotency_key] = (subject, amount)
+            self.xp[subject] = self.xp.get(subject, 0) + amount
+        return self.xp.get(subject, 0)
+
+    def reverse_xp(self, service_token: str, idempotency_key: str, reason: str) -> int | None:
+        assert service_token == "svc-secret"
+        self.reversals.append({"source": "social", "idempotency_key": idempotency_key, "reason": reason})
+        if not self.award_available:
+            return None
+        if idempotency_key not in self.awarded:
+            return -1  # 404: no such award
+        subject, amount = self.awarded[idempotency_key]
+        if idempotency_key not in self.reversed:
+            self.reversed.add(idempotency_key)
+            self.xp[subject] = self.xp.get(subject, 0) - amount
+        return self.xp.get(subject, 0)
 
     def get_run(self, token: str, run_id: str) -> dict:
         sub = self._sub(token)
@@ -150,7 +182,8 @@ class FakeStorage:
 
 # --------------------------------------------------------------------------- database
 
-TABLES = ["push_tickets", "ambassador_applications", "date_dismissals", "zone_visits", "dates_prefs", "user_blocks", "push_tokens", "notifications", "social_challenges", "checkins", "event_rsvps", "events", "crew_vouches",
+TABLES = ["ambassador_rewards", "ambassador_task_submissions", "ambassador_tasks", "ambassador_profiles",
+          "notification_preferences", "push_tickets", "ambassador_applications", "date_dismissals", "zone_visits", "dates_prefs", "user_blocks", "push_tokens", "notifications", "social_challenges", "checkins", "event_rsvps", "events", "crew_vouches",
           "crew_members", "crews", "members", "user_badges", "comments", "post_saves", "post_likes", "posts", "media", "activities", "follows", "user_stats", "users"]
 
 

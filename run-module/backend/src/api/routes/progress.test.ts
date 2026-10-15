@@ -72,13 +72,13 @@ describe("Progress API", () => {
     const response = await app.inject({ method: "GET", url: "/v1/progress", headers: await bearer(user) });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.totalXp).toBe(155); // run 70 + exercise 50 + campus 25 + challenge 10
+    expect(body.totalXp).toBe(185); // run 70 + exercise 50 + campus 25 + challenge 10 + daily goal 30 (ADR-033)
     // Runs now count as workouts alongside exercise sessions.
     expect(body.totalWorkouts).toBe(2);
     expect(body.totalDistanceKm).toBeCloseTo(2);
     expect(body.totalWorkoutMinutes).toBe(40);
     expect(body.challengesCompleted).toBe(1);
-    expect(body.today.xp).toBe(155);
+    expect(body.today.xp).toBe(185);
   });
 
   it("GET /v1/progress/daily uses the requested XP day and XP timezone boundary", async () => {
@@ -86,7 +86,7 @@ describe("Progress API", () => {
     await addRun(user, new Date("2026-09-25T23:00:00.000Z"), 2000); // 04:30 on Sep 26 in Asia/Kolkata
     const response = await app.inject({ method: "GET", url: "/v1/progress/daily?date=2026-09-26", headers: await bearer(user) });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ date: "2026-09-26", xp: 70, distanceKm: 2, isToday: false });
+    expect(response.json()).toMatchObject({ date: "2026-09-26", xp: 70 + 30, distanceKm: 2, isToday: false }); // + daily goal
   });
 
   it("GET /v1/progress/weekly returns the requested seven calendar days and totals", async () => {
@@ -101,7 +101,7 @@ describe("Progress API", () => {
     expect(body.days).toHaveLength(7);
     expect(body.days.map((day: { date: string }) => day.date)).toEqual([
       "2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-26", "2026-09-27"]);
-    expect(body.xp).toBe(70);
+    expect(body.xp).toBe(70 + 30); // run + daily goal
   });
 
   it("GET /v1/progress/history respects days and rejects an absurd window", async () => {

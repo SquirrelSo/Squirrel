@@ -12,6 +12,12 @@ from the app; it reads them here:
 One call is made with the *service* token instead (SOCIAL_INTERNAL_TOKEN), for other people's XP:
 
   POST /internal/v1/xp/totals { subjects[] ≤200 } → { subject: xp }   (ADR-032 "XP reads")
+  POST /internal/v1/xp/award  { subject, amount, reason, source: "social", idempotency_key, source_id?, metadata? }
+                              → bare integer: the subject's new total (ambassador rewards, CONTRACT §1)
+  POST /internal/v1/xp/reverse { source: "social", idempotency_key, reason } → bare integer; 404 = no such award
+
+Award and reverse are called after Social's own commit and fail soft: they return None (logged)
+and the caller keeps the reward row pending, to retry on its next check.
 
 ASSUMPTION (matches mobile/src/api/endpoints.ts): GET /v1/runs/:id only returns runs owned by
 the token's user (404 otherwise), which is what makes "this run is yours" provable here.
@@ -19,11 +25,16 @@ the token's user (404 otherwise), which is what makes "this run is yours" provab
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Protocol
 
 import httpx
+
+log = logging.getLogger(__name__)
+
+XP_SOURCE = "social"
 
 
 class RunModuleError(Exception):
@@ -42,6 +53,11 @@ class RunModule(Protocol):
     def get_xp_board(self, token: str, window: str, limit: int) -> dict | None: ...
 
     def get_xp_totals(self, service_token: str, subjects: list[str]) -> dict[str, int] | None: ...
+
+    def award_xp(self, service_token: str, subject: str, amount: int, reason: str, idempotency_key: str, *,
+                 source_id: str | None = None, metadata: dict | None = None) -> int | None: ...
+
+    def reverse_xp(self, service_token: str, idempotency_key: str, reason: str) -> int | None: ...
 
 
 TOTALS_BATCH = 200  # the route's limit
@@ -126,3 +142,50 @@ class HttpRunModule:
                 return totals or None
             totals.update({k: int(v) for k, v in body.items() if isinstance(v, (int, float)) and v >= 0})
         return totals
+
+    def _post_service(self, service_token: str, path: str, body: dict) -> tuple[int, object] | None:
+        if not self._client or not service_token:
+            return None
+        try:
+            res = self._client.post(path, json=body, headers={"Authorization": f"Bearer {service_token}",
+                                                              "Accept": "application/json"})
+        except httpx.HTTPError as e:
+            log.warning("run module %s unreachable: %s", path, type(e).__name__)
+            return None
+        try:
+            payload = res.json()
+        except ValueError:
+            payload = None
+        return res.status_code, payload
+
+    def award_xp(self, service_token: str, subject: str, amount: int, reason: str, idempotency_key: str, *,
+                 source_id: str | None = None, metadata: dict | None = None) -> int | None:
+        """The subject's new XP total, or None when the award didn't go through (logged; retry later)."""
+        body: dict = {"subject": subject, "amount": int(amount), "reason": reason, "source": XP_SOURCE,
+                      "idempotency_key": idempotency_key}
+        if source_id:
+            body["source_id"] = source_id[:200]
+        if metadata:
+            body["metadata"] = metadata
+        answer = self._post_service(service_token, "/internal/v1/xp/award", body)
+        if answer is None:
+            return None
+        status, payload = answer
+        if status == 200 and isinstance(payload, (int, float)) and not isinstance(payload, bool):
+            return int(payload)
+        log.warning("run module xp award %s answered %s: %s", idempotency_key, status, str(payload)[:200])
+        return None
+
+    def reverse_xp(self, service_token: str, idempotency_key: str, reason: str) -> int | None:
+        """The new total; -1 when the Run Module has no such award (nothing to reverse); None on failure."""
+        answer = self._post_service(service_token, "/internal/v1/xp/reverse",
+                                    {"source": XP_SOURCE, "idempotency_key": idempotency_key, "reason": reason[:200]})
+        if answer is None:
+            return None
+        status, payload = answer
+        if status == 200 and isinstance(payload, (int, float)) and not isinstance(payload, bool):
+            return int(payload)
+        if status == 404:
+            return -1
+        log.warning("run module xp reverse %s answered %s: %s", idempotency_key, status, str(payload)[:200])
+        return None

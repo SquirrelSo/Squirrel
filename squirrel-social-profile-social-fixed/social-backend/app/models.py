@@ -289,11 +289,17 @@ class Member(Base):
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     verified_rank: Mapped[int | None] = mapped_column(Integer, unique=True)
     joined_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    # 0009: the referrer's referrals_count was bumped for this member (exactly once, on claim if
+    # already verified, else on verification); and when they first had an activity (ingested by
+    # the Run Module / Exercise) within ACTIVATION_WINDOW of joining (services/ambassador.py).
+    referral_counted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    activated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (
         CheckConstraint("referrals_count >= 0", name="ck_members_referrals_nonneg"),
         CheckConstraint("referred_by_id IS NULL OR referred_by_id <> user_id", name="ck_members_not_self"),
         Index("ix_members_referred_by", "referred_by_id"),
+        Index("ix_members_referred_by_joined", "referred_by_id", "joined_at", "user_id"),
     )
 
 
@@ -459,10 +465,37 @@ class Notification(Base):
     dedupe_key: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
     read_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # 0009: the preference category of `kind` (services/notify.py), and whether a push went out
+    # with it (for the per-recipient push rate limit).
+    category: Mapped[str | None] = mapped_column(String(16))
+    pushed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
 
     __table_args__ = (
         UniqueConstraint("user_id", "dedupe_key", name="uq_notifications_dedupe"),
         Index("ix_notifications_user_created", "user_id", "created_at", "id"),
+        Index("ix_notifications_user_category_created", "user_id", "category", "created_at"),
+    )
+
+
+class NotificationPreference(Base):
+    """Per-user notification settings. No row = everything on, no quiet hours. `categories` maps a
+    category (services/notify.py CATEGORIES) to {"push": bool, "in_app": bool}; a missing entry is
+    on. `system` is never muted. Quiet hours are minutes of the local day in `timezone`, and may
+    wrap midnight (start > end)."""
+
+    __tablename__ = "notification_preferences"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    categories: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    quiet_hours_start: Mapped[int | None] = mapped_column(SmallInteger)
+    quiet_hours_end: Mapped[int | None] = mapped_column(SmallInteger)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("quiet_hours_start IS NULL OR quiet_hours_start BETWEEN 0 AND 1439", name="ck_notification_prefs_qh_start"),
+        CheckConstraint("quiet_hours_end IS NULL OR quiet_hours_end BETWEEN 0 AND 1439", name="ck_notification_prefs_qh_end"),
+        CheckConstraint("(quiet_hours_start IS NULL) = (quiet_hours_end IS NULL)", name="ck_notification_prefs_qh_pair"),
     )
 
 
@@ -514,16 +547,104 @@ class AmbassadorApplication(Base):
     message: Mapped[str | None] = mapped_column(String(500))
 
     __table_args__ = (
-        CheckConstraint("status IN ('pending', 'under_review', 'approved', 'rejected')", name="ck_ambassador_status"),
+        CheckConstraint("status IN ('pending', 'under_review', 'approved', 'rejected', 'suspended')", name="ck_ambassador_status"),
         UniqueConstraint("user_id", "idempotency_key", name="uq_ambassador_idempotency"),
         Index("ix_ambassador_applications_user", "user_id", "submitted_at"),
         Index(
             "uq_ambassador_open",
             "user_id",
             unique=True,
-            sqlite_where=text("status IN ('pending', 'under_review', 'approved')"),
-            postgresql_where=text("status IN ('pending', 'under_review', 'approved')"),
+            sqlite_where=text("status IN ('pending', 'under_review', 'approved', 'suspended')"),
+            postgresql_where=text("status IN ('pending', 'under_review', 'approved', 'suspended')"),
         ),
+    )
+
+
+class AmbassadorProfile(Base):
+    """An ambassador: made when their application is approved. Their referral code is their
+    members.referral_code (one code system). Suspended ambassadors earn no rewards."""
+
+    __tablename__ = "ambassador_profiles"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    application_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("ambassador_applications.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    approved_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    suspended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    suspension_reason: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'suspended')", name="ck_ambassador_profiles_status"),
+        Index("ix_ambassador_profiles_status", "status"),
+    )
+
+
+class AmbassadorTask(Base):
+    __tablename__ = "ambassador_tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    xp_reward: Mapped[int] = mapped_column(Integer, nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    ends_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("xp_reward BETWEEN 1 AND 200", name="ck_ambassador_tasks_xp"),
+        CheckConstraint("ends_at IS NULL OR ends_at > starts_at", name="ck_ambassador_tasks_window"),
+        Index("ix_ambassador_tasks_active", "active", "starts_at"),
+    )
+
+
+class AmbassadorTaskSubmission(Base):
+    __tablename__ = "ambassador_task_submissions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("ambassador_tasks.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="submitted")
+    evidence: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    submitted_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"))
+
+    __table_args__ = (
+        UniqueConstraint("task_id", "user_id", name="uq_ambassador_submissions_task_user"),
+        CheckConstraint("status IN ('submitted', 'approved', 'rejected')", name="ck_ambassador_submissions_status"),
+        Index("ix_ambassador_submissions_status", "status", "submitted_at"),
+        Index("ix_ambassador_submissions_user", "user_id", "submitted_at"),
+    )
+
+
+class AmbassadorReward(Base):
+    """XP owed to an ambassador. The Run Module keeps the ledger: a row is awarded there (awarded_at)
+    after the commit that made it, retried while it isn't; `idempotency_key` is the Run Module's
+    too (referral:{referredUserId} / task:{taskId}:{userId}), so a retry never awards twice. A
+    reversed row counts nothing; its reversal is sent likewise (reverse_synced_at)."""
+
+    __tablename__ = "ambassador_rewards"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    ref_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    xp: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    awarded_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    reversed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    reversal_reason: Mapped[str | None] = mapped_column(String(200))
+    reverse_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('referral', 'task')", name="ck_ambassador_rewards_kind"),
+        CheckConstraint("xp > 0", name="ck_ambassador_rewards_xp"),
+        Index("ix_ambassador_rewards_user_kind_created", "user_id", "kind", "created_at"),
     )
 
 

@@ -7,6 +7,7 @@ import { authConfigured, warmKeys } from './auth/jwt.js';
 import { migrate } from './db/migrate.js';
 import { seedZones } from './seed/run.js';
 import { bridgeEnabled } from './identity/index.js';
+import { startSweeper } from './sweeper.js';
 
 async function main() {
   const app = await buildApp();
@@ -25,7 +26,10 @@ async function main() {
   warmKeys(app.log);
   await startRealtimeFanout(app.log);
   const abort = new AbortController();
-  if (config.worker.inline) void startWorker(app.log, abort.signal);
+  if (config.worker.inline) {
+    void startWorker(app.log, abort.signal);
+    startSweeper(app.log, abort.signal); // presence + bubble expiry, every minute
+  }
   await app.listen({ port: config.port, host: config.host });
   const shutdown = async () => {
     app.log.info('shutting down');

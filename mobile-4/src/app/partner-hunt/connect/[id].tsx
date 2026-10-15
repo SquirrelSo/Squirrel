@@ -1,6 +1,8 @@
 /**
  * PARTNER HUNT · REQUESTS & CONNECTIONS — GET …/requests. Incoming: accept, or decline (silent: they
- * never learn it). Outgoing: pending, then expired; withdraw. Connections: open their Social profile.
+ * never learn it); accepting earns you both 20 XP, once per buddy (the server awards it). Outgoing:
+ * pending, then expired; withdraw. Connections: open their Social profile, or remove them (silent,
+ * then a 30-day wait before either can ask again).
  * `id` is a request_id to highlight (the partner.accepted notification opens /partner-hunt/connect/{id}),
  * or "all".
  */
@@ -9,11 +11,12 @@ import { StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { errorText } from '@/api/campus';
 import { partnerHuntApi, type PartnerConnection, type PartnerRequest } from '@/api/partnerHunt';
-import { PersonCard } from '@/components/partnerHunt/Parts';
+import { PersonCard, RemoveBuddy } from '@/components/partnerHunt/Parts';
 import { ErrorState, LoadingRows } from '@/components/campus/States';
 import { Button, Display, Header, Kicker, Screen, SectionHeader, tap } from '@/components/ui';
 import { invalidatePartnerHunt, usePartnerHuntUser, usePartnerRequests, usePartnerStatus } from '@/hooks/usePartnerHunt';
 import { formatEventDate } from '@/logic/format';
+import { BUDDY_CONNECTED_XP } from '@/logic/partnerHunt';
 import { useApp } from '@/state/AppState';
 import { alpha, colors, fonts, radius } from '@/theme';
 
@@ -79,6 +82,7 @@ export default function Connect() {
           ) : (
             <Text style={styles.small}>No one’s asked yet.</Text>
           )}
+          {r.incoming.length > 0 && <Text style={[styles.small, { marginTop: 8 }]}>Connecting earns you both {BUDDY_CONNECTED_XP} XP, once per buddy.</Text>}
 
           <SectionHeader title={`Connected · ${r.connections.length}`} />
           {r.connections.length ? (
@@ -87,6 +91,7 @@ export default function Connect() {
                 <View key={c.request_id} style={[styles.item, hl(c.request_id)]}>
                   <PersonCard card={c.person} options={opts} onPress={() => open(c)} right={<Text style={styles.connected}>Connected</Text>} />
                   <Button label="Open their profile" iconLeft="account-circle" size="sm" variant="secondary" onPress={() => open(c)} />
+                  {userId && <RemoveBuddy userId={userId} connection={c} />}
                 </View>
               ))}
             </View>

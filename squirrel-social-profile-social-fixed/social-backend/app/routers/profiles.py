@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from app.db import utcnow
 from app.deps import DB, AppSettings, CurrentViewer, Limiter, RunModuleDep, Storage
 from app.errors import conflict, forbidden, invalid
-from app.models import Activity, Crew, CrewMember, CrewVouch, Follow, Media, Post, PostSave, User, UserStats
+from app.models import Activity, Crew, CrewMember, CrewVouch, Follow, Media, Post, PostSave, User, UserBlock, UserStats
 from app.pagination import before, clamp_limit, decode_uuid_cursor, encode_cursor
 from app.rules import normalize_username, username_problem
 from app.schemas import (
@@ -232,7 +232,7 @@ def search_users(db: DB, viewer: CurrentViewer, settings: AppSettings, storage: 
 
 @router.get("/users/suggestions", response_model=UserPage)
 def suggestions(db: DB, viewer: CurrentViewer, settings: AppSettings, storage: Storage, limit: int = 10):
-    """People you don't follow yet: same city first, then most followed."""
+    """People you don't follow yet, and nobody blocked either way: same city first, then most followed."""
     me = viewer.user
     order = [UserStats.followers_count.desc(), User.created_at.desc(), User.id]
     if me.city_id:
@@ -243,6 +243,9 @@ def suggestions(db: DB, viewer: CurrentViewer, settings: AppSettings, storage: S
         .where(
             User.id != me.id,
             User.id.not_in(select(Follow.followee_id).where(Follow.follower_id == me.id)),
+            # Blocked either way: never suggested.
+            User.id.not_in(select(UserBlock.blocked_id).where(UserBlock.blocker_id == me.id)),
+            User.id.not_in(select(UserBlock.blocker_id).where(UserBlock.blocked_id == me.id)),
         )
         .order_by(*order)
         .limit(min(20, max(1, limit)))

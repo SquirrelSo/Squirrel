@@ -7,7 +7,8 @@ export type NotificationType =
   | 'territory.stolen' | 'territory.challenged' | 'territory.defended' | 'zone.claimed'
   | 'challenge.invitation' | 'challenge.reminder' | 'challenge.updated'
   | 'event.reminder' | 'meetup.check_in' | 'meetup.invited' | 'meetup.accepted' | 'meetup.declined' | 'meetup.cancelled'
-  | 'activity.verification_complete';
+  | 'activity.verification_complete'
+  | 'bubble.activity';
 
 export function campusNotificationDedupeKey(type: NotificationType, sourceId: string, recipientId: string, transition = ''): string {
   const digest = createHash('sha256').update(`${type}\0${sourceId}\0${recipientId}\0${transition}`).digest('hex');
@@ -30,6 +31,7 @@ function appCategory(type: NotificationType): string {
   if (type.startsWith('territory.') || type.startsWith('zone.')) return 'territory';
   if (type.startsWith('challenge.')) return 'invite';
   if (type.startsWith('meetup.') || type.startsWith('event.')) return 'event';
+  if (type.startsWith('bubble.')) return 'bubble';
   return type;
 }
 

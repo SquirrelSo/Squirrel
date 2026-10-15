@@ -3,16 +3,22 @@
  * invents one — and once you've applied, you see your status instead of the form. Only accounts
  * with a verified email may apply; an access-code account verifies here by signing in with an
  * emailed code, which gives it a token with `ev: true` (Social then lets it apply).
+ *
+ * An approved ambassador (GET /v1/ambassador/me answers) sees the programme instead: status, code
+ * and invite link, counts, tasks, referrals and the leaderboard (components/ambassador). Its 404
+ * not_ambassador — or the programme not being live yet — keeps the application view.
  */
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { Mascot } from '@/art/Mascot';
-import { errorText } from '@/api/campus';
+import { ambassadorApi, isNotAmbassador, type AmbassadorMe } from '@/api/ambassador';
+import { errorText, featureUnavailable } from '@/api/campus';
 import { useAuth } from '@/auth/AuthProvider';
 import { applyAmbassador, getAmbassador } from '@/api/campus/community';
 import type { AmbassadorApplication, AmbassadorField, AmbassadorState, AmbassadorStatus } from '@/api/campus/types';
-import { ErrorState, LoadingRows, SourceBadge } from '@/components/campus/States';
+import { AmbassadorDashboard } from '@/components/ambassador/Dashboard';
+import { ErrorState, LoadingRows, NotLiveYet, SourceBadge } from '@/components/campus/States';
 import { shortTime } from '@/components/campus/territoryUi';
 import { Button, Card, Display, Header, Icon, Kicker, Screen, tap } from '@/components/ui';
 import { invalidateCampus, useCampus, useConfig } from '@/hooks/useCampus';
@@ -23,15 +29,51 @@ const STATUS: Record<AmbassadorStatus, { label: string; line: string; color: str
   under_review: { label: 'Under review', line: 'The team is reading it now.', color: colors.violet, icon: 'eye-outline', step: 2 },
   approved: { label: 'Approved', line: 'Welcome to the crew behind the crew.', color: colors.primary, icon: 'check-decagram', step: 3 },
   rejected: { label: 'Not this time', line: 'Thanks for putting your hand up. Keep moving — there’ll be another round.', color: colors.dim, icon: 'close-circle-outline', step: 3 },
+  suspended: { label: 'Paused', line: 'Your ambassador role is paused. The team will be in touch.', color: colors.dim, icon: 'pause-circle-outline', step: 3 },
 };
 
 export default function Ambassador() {
+  const me = useCampus<AmbassadorMe>('ambassador:me', () => ambassadorApi.me());
+  // What the last answer said. A refetch (after applying, say) keeps that view instead of flashing
+  // a loader, so the form and its "application received" card stay put.
+  const answer = me.data ? 'ambassador' : me.signedOut || isNotAmbassador(me.cause) ? 'applicant' : featureUnavailable(me.cause) ? 'not_live' : me.error ? 'error' : null;
+  const [last, setLast] = useState(answer);
+  if (answer && answer !== last) setLast(answer);
+  const view = answer ?? last;
+  if (me.data) return <Programme me={me.data} />;
+  if (view === 'applicant' || view === 'not_live') return <Application programmeNotLive={view === 'not_live'} />;
+  return (
+    <Screen tabBar={false}>
+      <Header back title="" right={<SourceBadge />} />
+      <Kicker color={colors.violet}>Ambassador programme</Kicker>
+      {me.error ? <ErrorState cause={me.cause} onRetry={me.reload} feature="The ambassador programme" /> : <LoadingRows rows={4} height={64} style={{ marginTop: 18 }} />}
+    </Screen>
+  );
+}
+
+function Programme({ me }: { me: AmbassadorMe }) {
+  return (
+    <Screen tabBar={false}>
+      <Header back title="" right={<SourceBadge />} />
+      <Kicker color={colors.violet}>Ambassador programme</Kicker>
+      <Display size={36} style={{ marginTop: 4 }}>
+        Squirrel{'\n'}
+        <Text style={{ color: colors.primary }}>ambassador</Text>
+      </Display>
+      <AmbassadorDashboard me={me} />
+    </Screen>
+  );
+}
+
+function Application({ programmeNotLive }: { programmeNotLive: boolean }) {
   const auth = useAuth();
   const config = useConfig();
   const r = useCampus<AmbassadorState>('ambassador', () => getAmbassador());
   const [justApplied, setJustApplied] = useState<AmbassadorApplication | null>(null);
   const campus = config.data?.campus.name ?? 'your campus';
   const app = justApplied ?? r.data?.application ?? null;
+  // Social reopens the form once a rejection's cooldown has passed (open, with the old application).
+  const reapply = !justApplied && app?.status === 'rejected' && !!r.data?.open;
   // An application already made keeps showing its status; otherwise an unverified account is asked
   // to verify before it sees the form (the server refuses it anyway).
   const needsVerify = auth.mode === 'live' && !auth.emailVerified && !app;
@@ -53,8 +95,12 @@ export default function Ambassador() {
           <ErrorState cause={r.cause} onRetry={r.reload} feature="Ambassador applications" />
         ) : !r.data ? (
           <LoadingRows rows={4} height={64} style={{ marginTop: 18 }} />
-        ) : app ? (
-          <StatusView app={app} fresh={!!justApplied} />
+        ) : app && !reapply ? (
+          <>
+            <StatusView app={app} fresh={!!justApplied} programmeNotLive={programmeNotLive} />
+            {/* e.g. "You can apply again on …" during a rejection's cooldown */}
+            {app.status === 'rejected' && !r.data.open && !!r.data.closed_reason && <Text style={styles.body}>{r.data.closed_reason}</Text>}
+          </>
         ) : !r.data.open ? (
           <Card style={styles.center}>
             <Icon name="door-closed" size={28} color={colors.dim} />
@@ -207,7 +253,7 @@ function ApplyForm({ fields, onApplied }: { fields: AmbassadorField[]; onApplied
   );
 }
 
-function StatusView({ app, fresh }: { app: AmbassadorApplication; fresh: boolean }) {
+function StatusView({ app, fresh, programmeNotLive }: { app: AmbassadorApplication; fresh: boolean; programmeNotLive: boolean }) {
   const s = STATUS[app.status] ?? STATUS.pending;
   const steps = ['Submitted', 'Under review', 'Decision'];
   return (
@@ -237,6 +283,11 @@ function StatusView({ app, fresh }: { app: AmbassadorApplication; fresh: boolean
         </View>
         <Text style={styles.body}>{app.message ?? s.line}</Text>
       </Card>
+      {app.status === 'approved' && programmeNotLive && (
+        <View style={{ marginTop: 14 }}>
+          <NotLiveYet name="Your ambassador dashboard" compact body="Your code, tasks and referrals show up here once the programme goes live." />
+        </View>
+      )}
       {app.status === 'approved' && <Button label="Open your campus" variant="secondary" iconLeft="map-marker-radius" onPress={() => router.push('/explore')} style={{ marginTop: 14 }} />}
     </>
   );

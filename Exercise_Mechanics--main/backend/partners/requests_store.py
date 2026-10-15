@@ -5,8 +5,9 @@ it, in one file, changed under one in-process lock (Exercise runs a single worke
 
     data/partner_hunt/requests.json    {"requests": [row…]}
 
-A row: {request_id, from_user, to_user, status, created_at, expires_at, decided_at}, times as
-datetimes. Every read-check-write runs inside `transaction(...)`, so two requests between the same
+A row: {request_id, from_user, to_user, status, created_at, expires_at, decided_at, removed_at,
+removed_by}, times as datetimes (removed_* are set only on a connection someone removed; older file
+rows may lack them). Every read-check-write runs inside `transaction(...)`, so two requests between the same
 people, or a burst from one sender, can't both slip past the limits.
 """
 
@@ -26,14 +27,15 @@ from backend.db import connection
 from backend.db import partner_requests as db_requests
 from backend.db.connection import pooled
 
-_TIMES = ("created_at", "expires_at", "decided_at")
+_TIMES = ("created_at", "expires_at", "decided_at", "removed_at")
 _lock = threading.RLock()
 
 
 @contextmanager
 def transaction(*lock_keys: str) -> Iterator[object]:
     """A transaction holding the named locks (in the order given). Yields an object with
-    rows_for(user_id), get(request_id), insert(row) and set_status(request_id, status, decided_at)."""
+    rows_for(user_id), get(request_id), insert(row), set_status(request_id, status, decided_at) and
+    mark_removed(request_id, removed_by, removed_at)."""
     if connection.enabled():
         with pooled() as conn:
             for key in lock_keys:
@@ -76,6 +78,12 @@ class _FileTx:
         for r in self.rows:
             if r["request_id"] == request_id:
                 r["status"], r["decided_at"] = status, decided_at
+                self.dirty = True
+
+    def mark_removed(self, request_id: str, removed_by: str, removed_at: datetime) -> None:
+        for r in self.rows:
+            if r["request_id"] == request_id:
+                r["status"], r["removed_at"], r["removed_by"] = "removed", removed_at, removed_by
                 self.dirty = True
 
 

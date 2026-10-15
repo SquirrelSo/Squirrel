@@ -1,7 +1,8 @@
 /**
  * src/notifications/deliver.ts
  *
- * Delivers the notification_delivery queue (territory captured, lost, expired: emitter.ts) to the
+ * Delivers the notification_delivery queue (territory captured, lost, expired: emitter.ts; XP level
+ * ups: xp/level-up.ts) to the
  * Social service, which keeps the in-app list and sends the pushes:
  * POST {SOCIAL_API_URL}/internal/v1/notifications with the service token SOCIAL_INTERNAL_TOKEN.
  *
@@ -20,6 +21,20 @@ export const DELIVERY_TIMEOUT_MS = 90_000;
 /** The Social service's InternalNotificationIn for one outbox event. */
 export function socialNotificationPayload(event: NotificationEvent): Record<string, unknown> {
   const p = event.payload ?? {};
+  if (event.type === "xp.level_up") {
+    // Not a territory kind: Social takes the text from the caller (CONTRACT §2), and dedupes per
+    // user on level:{subject}:{level}, so a level is announced once even if XP dips and returns.
+    const level = typeof p["level"] === "number" ? p["level"] : 0;
+    const xp = typeof p["xp"] === "number" ? p["xp"] : 0;
+    return {
+      user_subject: event.user_id,
+      kind: event.type,
+      title: `You reached level ${level}!`,
+      body: `${xp} XP so far. Keep it up.`,
+      data: { level, xp, route: "/progress" },
+      dedupe_key: typeof p["dedupe_key"] === "string" ? p["dedupe_key"] : `level:${event.user_id}:${level}`,
+    };
+  }
   const data: Record<string, unknown> = {};
   for (const key of ["capture_event_id", "run_id", "territory_id", "area_delta_m2", "territories_taken"]) {
     const value = p[key];

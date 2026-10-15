@@ -63,8 +63,11 @@ export default function PlanMeetup() {
       router.replace({ pathname: '/meetup/[id]', params: { id: m.id } });
     } catch (e) {
       setCreating(false);
-      // campus-service only knows people who've used the map; anyone else is "not found".
-      setError(errorKind(e) === 'not_found' ? 'Someone you picked hasn’t used the campus map yet, so they can’t be invited. Try without them.' : errorText(e));
+      // Two different 404s: invitees campus-service doesn't know (the server names them) and a zone that
+      // is no longer active ("Zone not found").
+      const notFound = errorKind(e) === 'not_found';
+      const unknownPeople = notFound && /campus map/i.test(e instanceof Error ? e.message : '');
+      setError(unknownPeople ? `${errorText(e)}. Try without them.` : notFound ? 'This zone isn’t open for meetups any more. Pick another place on the map.' : errorText(e));
     }
   };
 

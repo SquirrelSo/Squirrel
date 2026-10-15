@@ -5,7 +5,7 @@ import * as SecureStore from 'expo-secure-store';
 import { ApiError, setApiToken, setTokenRefresher } from '@/api/client';
 import { setCampusEmail } from '@/api/campus/social';
 import { communityApi } from '@/api/community';
-import { API_CONFIGURED, AUTH_CONFIGURED, CAMPUS_API_CONFIGURED, EXERCISE_API_CONFIGURED, PROGRESS_API_CONFIGURED, SOCIAL_API_CONFIGURED } from '@/api/config';
+import { API_CONFIGURED, AUTH_CONFIGURED, CAMPUS_API_CONFIGURED, EXERCISE_API_CONFIGURED, SOCIAL_API_CONFIGURED } from '@/api/config';
 import { exerciseApi, type ExerciseUser } from '@/api/exercise';
 import { invalidateRemote } from '@/api/useRemote';
 import { profileApi } from '@/api/social';
@@ -16,7 +16,7 @@ import { resetTerritories } from '@/state/territoryStore';
 import { looksLikeEmail, normalizeIndianMobile, splitFullName } from '@/logic/accessSignup';
 
 /** Some backend that authenticates the bearer token is configured. */
-const BEARER_BACKEND = API_CONFIGURED || CAMPUS_API_CONFIGURED || PROGRESS_API_CONFIGURED || EXERCISE_API_CONFIGURED || SOCIAL_API_CONFIGURED;
+const BEARER_BACKEND = API_CONFIGURED || CAMPUS_API_CONFIGURED || EXERCISE_API_CONFIGURED || SOCIAL_API_CONFIGURED;
 
 const NO_ACCOUNT_SERVER = 'No account server is configured. Set EXPO_PUBLIC_EXERCISE_API_URL, or explore the demo.';
 

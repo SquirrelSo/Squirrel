@@ -13,7 +13,7 @@ Base URL: `https://<host>` · all routes are under `/v1` · JSON in, JSON out ·
 | 401 | `unauthorized` |
 | 403 | `forbidden` |
 | 404 | `not_found`, `zone_inactive` |
-| 409 | `already_owned`, `not_qualified`, `qualification_pending`, `unclaimed`, `own_zone`, `shielded`, `not_owner`, `not_under_attack`, `territory_conflict`, `idempotency_key_reused`, `activity_finished`, `challenge_conflict`, `crew_name_taken`, `crew_transfer_required`, `meetup_blocked`, `meetup_closed`, `meetup_participant_state` |
+| 409 | `already_owned`, `not_qualified`, `qualification_pending`, `unclaimed`, `own_zone`, `shielded`, `not_owner`, `not_under_attack`, `territory_conflict`, `idempotency_key_reused`, `activity_finished`, `challenge_conflict`, `crew_name_taken`, `crew_transfer_required`, `meetup_blocked`, `meetup_closed`, `meetup_participant_state`, `open_to_meet_required` |
 | 413 | `payload_too_large` |
 | 422 | `invalid`, `invalid_gps` |
 | 429 | `rate_limited`, `cooldown`, `defend_cooldown` (with `expires_at`) |
@@ -83,10 +83,10 @@ What you have in common: `{ "shared_zones": [{zone_id, zone_name, relation}], "s
 
 A block in either direction returns **404 `not_found`** — the same answer as a user who does not exist, so the route never reveals that a block is the reason. When Social cannot be reached the route returns an empty result with `hidden_reason: "blocks_unreachable"`; that is a different condition and may be shown.
 
-### `POST /v1/users/:id/block` · `DELETE /v1/users/:id/block` 🔒
-Create or remove a directed block; both operations are idempotent. Self-blocking returns 422.
+### `POST /v1/users/:id/block` · `DELETE /v1/users/:id/block` 🔒 (legacy)
+Create or remove a directed block in the legacy local table; both operations are idempotent. Self-blocking returns 422. With `LEGACY_LOCAL_BLOCKS=0` (after the import), these and `GET /v1/me/blocks` return **410 `blocks_moved`**: block through Social's `POST`/`DELETE /v1/users/{id}/block`.
 
-**Blocks are owned by the Social service** (ADR-032). This service reads the caller's full block set from Social's internal API, caches it for at most 30 seconds, and unions it with its own local `blocks` table during migration. If Social cannot be reached and no fresh answer is cached, every block check **fails closed**: lists that filter people (Nearby, Active now, map players, shared zones) return empty with `hidden_reason: "blocks_unreachable"`, and actions between two people are refused with a retryable 503. The app's Block button writes to Social, not here. Running without `SOCIAL_API_URL` and `SOCIAL_INTERNAL_TOKEN` in production is refused at startup.
+**Blocks are owned by the Social service** (ADR-032). This service reads the caller's full block set from Social's internal API, caches it for at most 30 seconds, and, while `LEGACY_LOCAL_BLOCKS=1` (the default), unions it with its own local `blocks` table during migration. If Social cannot be reached and no fresh answer is cached, every block check **fails closed**: lists that filter people (Nearby, Active now, map players, shared zones) return empty with `hidden_reason: "blocks_unreachable"`, and actions between two people are refused with a retryable 503. The app's Block button writes to Social, not here. Running without `SOCIAL_API_URL` and `SOCIAL_INTERNAL_TOKEN` in production is refused at startup.
 
 ### `GET /v1/me/blocks` 🔒
 `{ "blocks": [{ "user_id", "created_at", "person": Person|null }] }` for users the caller has blocked.
@@ -111,6 +111,7 @@ Guests accept or decline (decline has no reason field); the host is notified of 
 ### `POST /v1/meetups/:id/check-in` 🔒
 Body `{ "notify_safety_contact": boolean }` → `{ "meetup_id", "checked_in_at", "safety_notification": { "requested", "status", "contact_label" } }`.
 Participants (invited or accepted) and hosts can check in. The check-in window opens 1 hour before `starts_at` and closes 6 hours after. It changes an invited guest to `accepted`. The same request replays safely without creating duplicate check-ins. If `notify_safety_contact` is requested, the status currently returns `not_configured`.
+**XP:** once at least two participants of a meetup have checked in, each checked-in participant is awarded `meetup_checkin` XP (25, source `campus`) by the Run Module, once per meetup per person (idempotency key `meetup:{meetupId}:{subject}`): the second check-in awards both, each later one awards only itself. The award is sent after the check-in commits and never delays or fails it; a Run Module failure is only logged.
 
 ### `GET /v1/meetups/:id/rating` 🔒
 ```json
@@ -262,7 +263,9 @@ Zones the activity interacted with, from the verification pipeline, with **live*
 Exact positions are stored for distance math but **never returned**. Others see proximity buckets (`very_close` ≤ 150 m, `nearby` ≤ 500 m, `on_campus`) or grid-snapped cells (100 m).
 
 ### `PUT /v1/map/presence` 🔒 — rate limit 10/min
-Body `{ "lat", "lng", "accuracy_m"? }` → `{ "accepted": true }` (or `{ accepted:false, reason:"off_campus" }`). Presence expires after 15 min.
+Body `{ "lat", "lng", "accuracy_m"? }` → `{ "accepted": true }` (or `{ accepted:false, reason:"off_campus" }`). Presence expires after 15 min; a sweep every minute (worker, and the API when `WORKER_INLINE`) deletes expired rows, so an exact fix is not kept past its TTL.
+
+**Consent.** Wherever another person is listed (map players, Nearby, proximity in Active, shared zones, Bubble, Discover), "open to meet" means `open_to_meet` is on **and** `open_to_meet_until` is unset or in the future. A lapsed window counts as off at once, before any sweep.
 
 ### `GET /v1/people/active` 🔒 (aliases `GET /v1/activity/active`, `GET /v1/activity/nearby` → nearby only)
 ```json
@@ -276,7 +279,7 @@ Body `{ "lat", "lng", "accuracy_m"? }` → `{ "accepted": true }` (or `{ accepte
 * Both lists come back empty with `hidden_reason: "blocks_unreachable"` when the block set cannot be read from Social — showing nobody is correct; showing a blocked person is not.
 
 ### `GET /v1/map/players` 🔒
-Grid-snapped positions (`position: [lat,lng]`, `precision_m: 100`) of people who are open to meet; empty with `hidden_reason: "open_to_meet_off"` if the caller is not, or `"blocks_unreachable"` if the block set cannot be read.
+Grid-snapped positions (`position: [lat,lng]`, `precision_m: 100`) of people who are open to meet (consent current); empty with `hidden_reason: "open_to_meet_off"` if the caller is not, or `"blocks_unreachable"` if the block set cannot be read.
 
 ### `GET /v1/map/heatmap` 🔒
 Aggregated activity intensity cells for `window=7d|30d` (default `7d`). Cells use a fixed 100 m grid and are returned only when at least 3 distinct, non-banned users have fully verified activity in the window. Response intensities are coarse `low` / `medium` / `high` buckets; exact user counts, identities, timestamps and GPS points are never returned. At most 500 cells are returned.
@@ -291,6 +294,64 @@ Returns up to 10 advisory suggestions for people already visible through shared 
 A GeoJSON `FeatureCollection` of active zones for the map layer: zone geometry, `geometry_source`, and a territory summary (state and a generic owner type). Contains no owner identity, no presence and no user positions.
 
 ### `GET /v1/activity/active-count` — `{ "active_now": n, "as_of" }`
+
+---
+
+## Bubble — ephemeral proximity
+
+An opt-in layer for "who is around me right now". Joining reduces the caller's position to a **~250 m grid cell** and the zone containing it (PostGIS `ST_Contains`); the coordinates are then discarded — never stored, logged or returned. Members see other members in their own cell and the 8 cells around it (3×3). Membership lasts 15 min (`BUBBLE_TTL_MINUTES`) and is refreshed by joining again; a sweep every minute deletes expired members and members whose Open to Meet has lapsed. Turning Open to Meet off leaves the bubble at once.
+
+Nobody is listed unless their Open to Meet is current, and nobody blocked in either direction (Social's list ∪ the local table) is ever listed or sent an event. If the block set cannot be read, lists are empty with `hidden_reason: "blocks_unreachable"` and no events are sent.
+
+```jsonc
+PersonCard { "person": { "user_id", "display_name", "avatar_url", "hostel", "connection_mode", "bio", "level", "xp" },
+             "activity": { "type": "run"|"walk"|"workout", "started_at": iso|null } | null,
+             "proximity": "very_close" | "nearby" | "on_campus" | null,   // bubble: same cell | touching cell
+             "zone": { "id", "name" } | null,
+             "states": ["nearby"|"active_nearby"|"recently_active"|"same_zone"|"same_campus"|"same_activity"],
+             "last_seen_at": iso }
+```
+`level` comes from the XP read cache. `states`: `nearby` in my 3×3 neighbourhood; `active_nearby` nearby with a live activity (recorded, or declared on join); `recently_active` no live activity but one started in the last 2 h; `same_zone` in my zone; `same_campus` always; `same_activity` the same activity type as mine. No coordinates, distances or cells appear in any response or event.
+
+### `POST /v1/bubble/join` 🔒 — rate limit 6/min
+Body `{ "lat", "lng", "accuracy_m"?, "activity_type"?: "run"|"walk"|"workout"|null }` (unknown fields → 422). Requires a current Open to Meet: otherwise **409 `open_to_meet_required`**. Off campus → `200 { accepted: false, reason: "off_campus", …state }` and the caller leaves the bubble. Idempotent upsert: joining again refreshes the TTL, moves the cell, and changes `activity_type` only when the field is sent.
+→ `{ "accepted": true, "reason": null, …BubbleState }`
+
+### `POST /v1/bubble/leave` 🔒 → `204` (also when not a member)
+
+### `GET /v1/bubble` 🔒 — the caller's own state (no parameters; there is no way to read someone else's)
+```jsonc
+BubbleState { "in_bubble": bool, "zone": { id, name }|null, "expires_at": iso|null, "activity_type": …|null,
+              "counts": { "nearby", "active_nearby", "same_zone", "same_activity" },   // after block filtering
+              "hidden_reason": null|"open_to_meet_off"|"blocks_unreachable", "as_of" }
+```
+
+### `GET /v1/bubble/nearby?state=&limit=20&cursor=` 🔒
+`{ "items": [PersonCard], "next_cursor": string|null, "in_bubble", "hidden_reason": null|"open_to_meet_off"|"not_in_bubble"|"blocks_unreachable", "as_of" }`. Ordered same cell first, then most recently refreshed. `state` filters by one of the states above; `limit` 1–50; `cursor` is the opaque `next_cursor` (keyset; it carries no user id).
+
+---
+
+## Discover
+
+Read-only aggregation of campus-owned data. All routes 🔒, block- and consent-filtered, never return coordinates, distances, exact visitor counts or another person's history. Lists share one shape: `{ "items": […], "next_cursor": string|null, "hidden_reason": string|null, "as_of" }` with `limit` 1–50 (default 20) and keyset `cursor`; unknown query parameters → 422.
+
+### `GET /v1/discover`
+`{ "nearby": [PersonCard ≤5], "active": [PersonCard ≤5], "challenges": [DiscoverBattle ≤5], "zones": [DiscoverZone ≤5], "crews": [DiscoverCrew ≤5], "reasons": { "<section>": null|reason }, "as_of" }`. A section that cannot be served is `[]` with its reason (`open_to_meet_off`, `location_unknown`, `blocks_unreachable`, `crew_names_unavailable`, or `unavailable`); the response never fails as a whole.
+
+### `GET /v1/discover/nearby?activity_type=&zone_id=&sort=proximity|recent`
+People near the caller who opted in: bubble members in the 3×3 neighbourhood plus people whose presence is within 800 m of the caller's (each listed once). Requires the caller's own Open to Meet (`hidden_reason: "open_to_meet_off"`) and a bubble membership or live presence (`"location_unknown"`). Items are PersonCards; proximity is a bucket only.
+
+### `GET /v1/discover/active?activity_type=&sort=recent|level`
+People with a live recorded activity whose Open to Meet is current. `proximity` is filled only when the caller is open to meet too (as on `/v1/people/active`).
+
+### `GET /v1/discover/challenges?type=territory|weekend_war|zone_race|group_activity&zone_id=`
+Territory battles (`pending|accepted|active`) the caller is part of: created by them, targeting them, or targeting a crew they belong to (Social membership). Never other people's invites; battles with someone blocked either way are left out. `DiscoverBattle` = `Challenge` + `{ "relation": "yours"|"incoming"|"crew", "zone_qualified": bool, "near_you": bool }`, ordered near-you first, then zones the caller qualifies in, then `starts_at`. Also returns `crew_battles_unavailable` (as the battles list).
+
+### `GET /v1/discover/crews`
+`DiscoverCrew { "crew": { id, name, color, icon }, "zones_held" }`, ranked by zones held (campus owns that number). Names come from Social; no member lists. While Social is unreachable crews are listed by id with an empty name and `hidden_reason: "crew_names_unavailable"`.
+
+### `GET /v1/discover/zones?sort=popular|contested|unclaimed`
+`DiscoverZone { "zone": { id, name, kind }, "territory": { "status": "unclaimed"|"claimed"|"contested", "owner_type": "none"|"user"|"crew" }, "popularity": "low"|"medium"|"high"|null, "contested": bool }`. Popularity = distinct verified users with a non-pass-through visit in the last 7 days, shown only as a bucket and only when at least 3 users (k-anonymity, as the heatmap); `popular` lists only those zones, ordered by bucket then name. `contested` = contested, under challenge, or an accepted/active battle there. No owner identity.
 
 ---
 
@@ -322,9 +383,9 @@ Challenge { "id", "type", "type_label", "from": Person, "target": { "type": "use
 `actions` lists the actions this caller may take now; it is also enforced by the action routes. `actions_status: "crew_role_unavailable"` means Social could not confirm crew membership, so role-dependent actions may be missing; retry after Social is reachable. This keeps the client from treating unavailable role data as a confirmed lack of permission.
 Crew-targeted rows are returned only when the caller's membership is known (from a fresh or stale cached lookup); membership is never guessed during an outage. On a cold start with no cached membership, crew rows are omitted and `crew_battles_unavailable` is `true`, so the client can show a retry state without exposing another crew's challenge or message.
 ### `POST …` 🔒 — rate limit 20/h
-Body `{ "type", "target": { "type": "user"|"crew", "id" }, "zone_id"?, "starts_at": iso, "ends_at"?: iso, "message"? }` → `201 Challenge`. 422 on bad combos (self-challenge, missing zone, past start), 404 unknown target/zone, 409 `challenge_conflict` if an open challenge already exists for the same target+zone. A block in either direction prevents creating one, and fails closed (503 `blocks_unreachable`) when the block set cannot be read.
+Body `{ "type", "target": { "type": "user"|"crew", "id" }, "zone_id"?, "starts_at": iso, "ends_at"?: iso, "message"? }` → `201 Challenge`. 422 on bad combos (self-challenge, missing zone, past start), 404 unknown target/zone, 409 `challenge_conflict` if an open challenge already exists for the same target+zone. A block in either direction prevents creating one against a user (`404 not_found`, as the person is hidden), and fails closed (503 `blocks_unreachable`) when the block set cannot be read.
 ### `PATCH …/:id/schedule` 🔒 — creator only while `pending|accepted`; body `{ "starts_at", "ends_at"? }`.
-### `POST …/:id/accept` · `/decline` 🔒 — invited side only (crew: owner/admin). 403 otherwise, 409 unless `pending`.
+### `POST …/:id/accept` · `/decline` 🔒 — invited side only (crew: owner/admin). 403 otherwise, 409 unless `pending`. Accepting a battle from someone blocked in either direction is refused as `404 not_found` (503 `blocks_unreachable` when the block set cannot be read); declining stays possible.
 ### `POST …/:id/cancel` 🔒 — creator only; `pending|accepted`.
 ### `POST …/:id/start` 🔒 — any participant; `accepted` and within 15 min of `starts_at` (accepted challenges also auto-activate at `starts_at`).
 ### `POST …/:id/complete` 🔒 — any participant; `active` and past `ends_at`. **The winner is decided by the server** from territory state (`territory`/`zone_race`: whoever holds the zone; `weekend_war`: crew zone counts). Body is ignored.
@@ -352,12 +413,12 @@ Every transition emits `challenge.created|updated` (and app alias `invite.update
 
 ```jsonc
 → { "type": "auth", "token": "<jwt>" }                      // optional; unlocks private topics
-→ { "type": "subscribe", "topics": ["territories","stats","invites","activities","active","notifications"] }
+→ { "type": "subscribe", "topics": ["territories","stats","invites","activities","active","notifications","bubble"] }
 → { "type": "ping" }
 ← { "type": "auth.ok" | "auth.error" | "subscribed" | "pong", "data": … }
 ← { "type": "<event>", "data": … }
 ```
-Default topics: `territories`, `stats`, `active`. Private events are only delivered to the users they concern.
+Default topics: `territories`, `stats`, `active`; after `auth` also `invites`, `activities`, `notifications`, `bubble`. Private events are only delivered to the users they concern.
 
 | event | topic | data | note |
 |---|---|---|---|
@@ -370,6 +431,10 @@ Default topics: `territories`, `stats`, `active`. Private events are only delive
 | `active.updated` | active | `{ active_now }` | |
 | `stats.updated` | stats | reserved | |
 | `notification.created` | notifications (private) | notification item | |
+| `bubble.user_joined` / `bubble.user_left` | bubble (private) | `{ person, activity, proximity, zone, state: "joined"|"left", at }` | to current, unblocked members of the member's 3×3 neighbourhood; on join of a new member (or moving into the neighbourhood), leave, expiry sweep, or moving out |
+| `bubble.activity_started` / `bubble.activity_ended` | bubble (private) | same, `state: "activity_started"|"activity_ended"` | when the declared `activity_type` changes or a recorded activity starts/ends |
+
+Bubble events never carry coordinates or distances, and at most one is sent per (member, recipient) per 60 s (`BUBBLE_EVENT_THROTTLE_S`); a client should refetch `/v1/bubble/nearby` on focus.
 
 Events fan out across API instances via Postgres `LISTEN/NOTIFY`; a page that misses events should simply refetch on focus.
 
@@ -377,9 +442,9 @@ Events fan out across API instances via Postgres `LISTEN/NOTIFY`; a page that mi
 
 ## Notification catalogue (forwarded to Social)
 
-`territory.stolen` (to previous owner) · `territory.challenged` (to owner when a rival qualifies on an unshielded zone) · `territory.defended` (to repelled attackers) · `zone.claimed` (to crew mates) · `challenge.invitation` · `challenge.updated` · `meetup.invited` · `meetup.accepted` · `meetup.declined` (status only) · `meetup.cancelled` · `activity.verification_complete` · reserved: `challenge.reminder`, `event.reminder`, `meetup.check_in`.
+`territory.stolen` (to previous owner) · `territory.challenged` (to owner when a rival qualifies on an unshielded zone) · `territory.defended` (to repelled attackers) · `zone.claimed` (to crew mates) · `challenge.invitation` · `challenge.updated` · `meetup.invited` · `meetup.accepted` · `meetup.declined` (status only) · `meetup.cancelled` · `activity.verification_complete` · `bubble.activity` (to a user who joins a bubble with ≥3 other visible members; at most once per user per 6 h, dedupe key per 6-hour window; route `/bubble`) · reserved: `challenge.reminder`, `event.reminder`, `meetup.check_in`.
 
 Social resolves `{actor}` and anonymizes it when the actor is unknown or either person has blocked the other. campus-service publishes `notification.created` only after Social returns a non-null notification id, and that id matches Social's list entry.
 
 ## Rate limits
-Global 300 req/min per user (or IP when anonymous). Ownership writes 20/min. Point batches 60/min. Activity creation 50/day. Presence 10/min. Challenge creation 20/h. Exceeding → 429 `rate_limited`.
+Global 300 req/min per user (or IP when anonymous). Ownership writes 20/min. Point batches 60/min. Activity creation 50/day. Presence 10/min. Bubble join 6/min. Challenge creation 20/h. Exceeding → 429 `rate_limited`.

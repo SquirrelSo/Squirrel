@@ -7,6 +7,7 @@
  * those same timestamps and `server_time`; it never decides anything the server hasn't sent.
  */
 import type { PersonLite } from '@/api/campus/types';
+import type { SharedWorkoutCompleted } from '@/api/featureContracts';
 
 export type SessionPhase = 'lobby' | 'expired' | 'countdown' | 'racing' | 'finished';
 export type Seat = 'host' | 'partner';
@@ -25,9 +26,14 @@ export type WorkoutParticipant = {
   /** When they tapped Finish, or ends_at once time ran out. */
   finished_at: string | null;
   left_at: string | null;
-  /** "closed": the lobby was closed for both (never says why). */
-  left_reason: 'left' | 'disconnected' | 'closed' | null;
+  /** "closed": the lobby was closed for both (never says why). "cancelled": the host called it off. */
+  left_reason: 'left' | 'disconnected' | 'closed' | 'cancelled' | null;
+  /** Once settled: whether the server awarded this player the finish XP. null before; older servers omit it. */
+  rewarded?: boolean | null;
 };
+
+/** The host's invitation to one of their Partner Hunt buddies. `user.user_id` is their Social profile id. */
+export type WorkoutInvite = { user: PersonLite; status: 'invited' | 'declined'; invited_at: string };
 
 export type SharedWorkoutSession = {
   session_id: string;
@@ -45,8 +51,12 @@ export type SharedWorkoutSession = {
   expires_at: string;
   starts_at: string | null;
   ends_at: string | null;
-  /** "hand_tapped" earns no XP; camera-counted reps come later. */
+  /** "hand_tapped" for now. XP is for finishing, not per rep (see SHARED_RACE_XP). */
   rep_source: string;
+  /** Only the players see these; an invite preview gets []. Older servers leave it out. */
+  invites?: WorkoutInvite[];
+  /** Set once the server has settled the race (who earned XP: each seat's `rewarded`, and workout.session.completed). */
+  completed_at?: string | null;
   /** Count down against this, never the phone's clock. */
   server_time: string;
 };
@@ -83,6 +93,7 @@ export type ScreenPhase =
   | 'you_left' // you left a started race
   | 'result' // the race is over
   | 'closed' // finished before it ever started (closed for both, no reason given)
+  | 'cancelled' // the host cancelled the lobby before the countdown
   | 'expired'
   | 'removed'; // you left the lobby and someone else is still in it: it's no longer yours
 
@@ -92,7 +103,7 @@ export function screenPhase(s: SharedWorkoutSession, serverNow: number): ScreenP
   const me = mySeat(s)!;
   if (phase === 'expired') return 'expired';
   if (phase === 'lobby') return s.partner ? 'lobby' : 'waiting';
-  if (phase === 'finished') return s.starts_at ? (me.left_at ? 'you_left' : 'result') : 'closed';
+  if (phase === 'finished') return s.starts_at ? (me.left_at ? 'you_left' : 'result') : me.left_reason === 'cancelled' ? 'cancelled' : 'closed';
   if (me.left_at) return 'you_left';
   if (me.finished_at) return 'you_finished';
   return phase;
@@ -124,6 +135,59 @@ export function applyReps(s: SharedWorkoutSession, u: RepsUpdate): SharedWorkout
   return { ...s, host: patch(s.host)!, partner: patch(s.partner) };
 }
 
+/** The host can cancel (and invite) only before the countdown: the lobby, with or without a partner. */
+export const canCancel = (s: SharedWorkoutSession, serverNow: number) => s.you === 'host' && !s.starts_at && livePhase(s, serverNow) === 'lobby';
+
+/** Where one buddy stands with this session's invitations: not asked yet, waiting, or said no. */
+export const inviteStatus = (s: SharedWorkoutSession, socialProfileId: string): WorkoutInvite['status'] | null =>
+  (s.invites ?? []).find((i) => i.user.user_id.toLowerCase() === socialProfileId.toLowerCase())?.status ?? null;
+
+/** At most this many invitations wait at once (the server's MAX_PENDING_INVITES; 429 beyond it). */
+export const MAX_PENDING_INVITES = 3;
+export const pendingInvites = (s: SharedWorkoutSession) => (s.invites ?? []).filter((i) => i.status === 'invited').length;
+
+/** What a refused invite means (POST …/{id}/invite). Each code its own sentence; anything else, the server's. */
+export function inviteRefusal(code: string | null, message: string): string {
+  switch (code) {
+    case 'not_a_buddy':
+      return 'You can only invite your Partner Hunt connections.';
+    case 'too_many_invites':
+      return `Up to ${MAX_PENDING_INVITES} invitations can wait at once. Wait for an answer first.`;
+    case 'session_full':
+      return 'Someone has already joined.';
+    case 'not_in_lobby':
+      return 'Invitations can only go out from the lobby.';
+    case 'not_host':
+      return 'Only the host can invite.';
+    default:
+      return message;
+  }
+}
+
+/** workout.session.invited: add (or update) that invitation; the session update that follows agrees. */
+export function applyInvited(s: SharedWorkoutSession, u: InvitedUpdate): SharedWorkoutSession {
+  if (u.session_id !== s.session_id) return s;
+  const others = (s.invites ?? []).filter((i) => i.user.user_id !== u.invite.user.user_id);
+  return { ...s, invites: [...others, u.invite] };
+}
+
+/** workout.session.cancelled: the host called the lobby off, so every seat left "cancelled" at that moment. */
+export function applyCancelled(s: SharedWorkoutSession, u: CancelledUpdate): SharedWorkoutSession {
+  if (u.session_id !== s.session_id || s.starts_at) return s;
+  const off = (p: WorkoutParticipant | null) => (p && !p.left_at ? { ...p, ready: false, left_at: u.at, left_reason: 'cancelled' as const } : p);
+  return { ...s, phase: 'finished', host: off(s.host)!, partner: off(s.partner) };
+}
+
+/** XP the server's shared_workout_finished award is worth (Run Module, at most three a day). Shown, never sent. */
+export const SHARED_RACE_XP = 20;
+
+/** Your line of the settled race (workout.session.completed), found by your seat's Social profile id. */
+export function myCompletedResult(s: SharedWorkoutSession | null, c: SharedWorkoutCompleted | null) {
+  const me = mySeat(s);
+  if (!s || !c || !me || c.session_id !== s.session_id) return null;
+  return c.results.find((r) => r.user.user_id === me.user.user_id) ?? null;
+}
+
 /** The per-session socket: the Exercise base with http(s) → ws(s). */
 export function sessionSocketUrl(base: string, sessionId: string, token: string) {
   return `${base.replace(/\/+$/, '').replace(/^http/i, 'ws')}/ws/workout-sessions/${encodeURIComponent(sessionId)}?token=${encodeURIComponent(token)}`;
@@ -133,7 +197,14 @@ export function sessionSocketUrl(base: string, sessionId: string, token: string)
 // Live updates: the session's socket, with a 2 s poll whenever it's down
 // ---------------------------------------------------------------------------
 
-export type SessionUpdate = { kind: 'session'; session: SharedWorkoutSession } | { kind: 'reps'; update: RepsUpdate };
+export type InvitedUpdate = { session_id: string; invite: WorkoutInvite };
+export type CancelledUpdate = { session_id: string; at: string };
+export type SessionUpdate =
+  | { kind: 'session'; session: SharedWorkoutSession }
+  | { kind: 'reps'; update: RepsUpdate }
+  | { kind: 'invited'; update: InvitedUpdate }
+  | { kind: 'cancelled'; update: CancelledUpdate }
+  | { kind: 'completed'; update: SharedWorkoutCompleted };
 export type LinkState = 'connecting' | 'live' | 'trouble' | 'gone';
 
 type SocketLike = {
@@ -253,6 +324,9 @@ export function startSessionLink(deps: LinkDeps, onUpdate: (u: SessionUpdate) =>
       }
       if (m.type === 'workout.session.updated') onUpdate({ kind: 'session', session: m.data as SharedWorkoutSession });
       else if (m.type === 'workout.reps.updated') onUpdate({ kind: 'reps', update: m.data as RepsUpdate });
+      else if (m.type === 'workout.session.invited') onUpdate({ kind: 'invited', update: m.data as InvitedUpdate });
+      else if (m.type === 'workout.session.cancelled') onUpdate({ kind: 'cancelled', update: m.data as CancelledUpdate });
+      else if (m.type === 'workout.session.completed') onUpdate({ kind: 'completed', update: m.data as SharedWorkoutCompleted });
     };
     ws.onerror = () => {
       // onclose follows

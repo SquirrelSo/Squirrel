@@ -109,3 +109,5 @@ export const RATE_LIMIT_POINTS_PER_MIN = parseInt(process.env.RATE_LIMIT_POINTS_
 export const RATE_LIMIT_POINTS_PER_DAY = parseInt(process.env.RATE_LIMIT_POINTS_PER_DAY || '2000', 10);
 export const RATE_LIMIT_RUNS_CREATE_PER_DAY = parseInt(process.env.RATE_LIMIT_RUNS_CREATE_PER_DAY || '50', 10);
 export const RATE_LIMIT_WRITE_PER_MIN = parseInt(process.env.RATE_LIMIT_WRITE_PER_MIN || '120', 10);
+/** Per-user limit on the app's XP reads (stats, history, XP board). Generous: they are cheap reads. */
+export const RATE_LIMIT_XP_READ_PER_MIN = parseInt(process.env.RATE_LIMIT_XP_READ_PER_MIN || '120', 10);

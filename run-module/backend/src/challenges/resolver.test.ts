@@ -331,7 +331,7 @@ test('H8: Activity OUTSIDE window does not count', async () => {
 test('H9: XP breakdown includes challenge completed', async () => {
   const starts = new Date(Date.now() - 3600000);
   const ends = new Date(Date.now() - 1000);
-  const REWARD = 234;
+  const REWARD = 180; // within the 200 xp_reward cap and the 200/day challenge cap (ADR-033)
 
   const ch = await createChallenge(U3, 'daily', 'xp test', 'distance_m', 'gte', 10, starts, ends, REWARD);
   

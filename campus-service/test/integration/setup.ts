@@ -22,8 +22,9 @@ export async function resetDb() {
   await seedZones({ source: 'placeholder' });
 }
 
-export let runFakeStats = { awards: 0, totals: 0, lastTotalSubjects: 0 };
-export function resetRunFakeStats() { runFakeStats = { awards: 0, totals: 0, lastTotalSubjects: 0 }; }
+export type AwardBody = { subject: string; amount: number; reason: string; source: string; idempotency_key: string; source_id?: string; metadata?: Record<string, unknown> };
+export let runFakeStats = { awards: 0, totals: 0, lastTotalSubjects: 0, awardBodies: [] as AwardBody[] };
+export function resetRunFakeStats() { runFakeStats = { awards: 0, totals: 0, lastTotalSubjects: 0, awardBodies: [] }; }
 export let runFakeState = { offline: false };
 
 export function useTestApp() {
@@ -37,6 +38,7 @@ export function useTestApp() {
     runFake.post('/internal/v1/xp/award', async (req, res) => { 
       if (runFakeState.offline) return res.status(503).send({ error: 'offline' });
       runFakeStats.awards++;
+      runFakeStats.awardBodies.push(req.body as AwardBody);
       return (req.body as any).amount + 1000; 
     }); 
     runFake.post('/internal/v1/xp/totals', async (req, res) => {

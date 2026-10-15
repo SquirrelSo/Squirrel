@@ -1,6 +1,6 @@
 import { pool } from "../db/pool.js";
-import { getUserXp, xpTimeZone } from "../xp/query.js";
-import { xpDay, validTimeZone, type ActivityRow, type XpLine } from "../xp/rules.js";
+import { getUserXpEntries, shiftDay, weekStartFor, xpTimeZone } from "../xp/query.js";
+import { levelForXp as xpLevel, summarize, xpByCategory, xpDay, validTimeZone, type ActivityRow, type XpCategory } from "../xp/rules.js";
 
 export type DayRow = {
   date: string; xp: number; steps: number; workouts: number; workoutMinutes: number;
@@ -9,7 +9,7 @@ export type DayRow = {
 export type Streak = { current: number; longest: number; lastQualifyingDate: string | null; todayStatus: "done" | "at_risk" | "none" };
 
 type ProgressActivity = ActivityRow & { user_id: string; calories_kcal: number | string | null };
-type ChallengeAward = { xp_awarded: number; resolved_at: Date };
+type ChallengeAward = { resolved_at: Date };
 
 const isoDate = (value: string | undefined, fallback: string): string => {
   const date = value ?? fallback;
@@ -20,13 +20,6 @@ const isoDate = (value: string | undefined, fallback: string): string => {
   return date;
 };
 
-const shiftDay = (date: string, offset: number): string => {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + offset);
-  return value.toISOString().slice(0, 10);
-};
-
-const weekStartFor = (date: string): string => shiftDay(date, -((new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7));
 const number = (value: unknown): number => {
   const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : 0;
   return Number.isFinite(parsed) ? parsed : 0;
@@ -41,19 +34,23 @@ function blankDay(date: string): DayRow {
     calories: 0, challengesCompleted: 0, goalsCompleted: 0 };
 }
 
-export async function readProgress(userId: string): Promise<{ days: Map<string, DayRow>; streak: Streak; timezone: string; xp: number; byDay: Record<string, number>; xpBreakdown: XpLine[] }> {
+export async function readProgress(userId: string): Promise<{ days: Map<string, DayRow>; streak: Streak; timezone: string; xp: number; byDay: Record<string, number>; xpBySource: Record<XpCategory, number> }> {
   const timezone = xpTimeZone();
-  const [activityResult, xpSummary, challengeResult] = await Promise.all([
+  const [activityResult, xpEntries, challengeResult] = await Promise.all([
     pool.query<ProgressActivity>(
       `SELECT id, user_id, type, source_module, started_at, duration_s, metrics, created_at, calories_kcal
        FROM activity_sessions WHERE user_id = $1 ORDER BY started_at, created_at, id`, [userId]),
-    getUserXp(userId),
+    getUserXpEntries(userId),
     pool.query<ChallengeAward>(
-      `SELECT cp.xp_awarded, c.resolved_at
+      `SELECT c.resolved_at
        FROM challenge_participants cp JOIN challenges c ON c.id = cp.challenge_id
        WHERE cp.user_id = $1 AND cp.is_winner IS TRUE AND cp.xp_awarded > 0 AND c.state = 'resolved'
+         AND c.resolved_at IS NOT NULL
        ORDER BY c.resolved_at`, [userId]),
   ]);
+  // XP per day comes only from the XP lines (src/xp), which already include challenge wins and
+  // awards after every cap (ADR-033), so a day's XP here is the same number the boards and stats use.
+  const xpSummary = summarize(xpEntries);
 
   const days = new Map<string, DayRow>();
   const rowFor = (date: string) => {
@@ -80,22 +77,18 @@ export async function readProgress(userId: string): Promise<{ days: Map<string, 
     day.calories += Math.max(0, number(row.calories_kcal));
   }
 
-  const challengeXpByDay: Record<string, number> = {};
   for (const award of challengeResult.rows) {
-    const date = xpDay(award.resolved_at, timezone);
-    const day = rowFor(date);
-    day.challengesCompleted += 1;
-    challengeXpByDay[date] = (challengeXpByDay[date] ?? 0) + award.xp_awarded;
+    rowFor(xpDay(award.resolved_at, timezone)).challengesCompleted += 1;
   }
-  for (const [date, row] of days) row.xp = (xpSummary.byDay[date] ?? 0) + (challengeXpByDay[date] ?? 0);
+  for (const [date, row] of days) row.xp = xpSummary.byDay[date] ?? 0;
   // Round at the day bucket so daily, weekly, history, and lifetime views share identical minutes.
   for (const row of days.values()) {
     row.workoutMinutes = Math.round(row.workoutMinutes);
     row.activeMinutes = Math.round(row.activeMinutes);
   }
 
-  // Daily goals have no agreed targets/reward rules yet (ADR-027), so return the contract's
-  // empty-goals state instead of inventing goals or bonus XP.
+  // The daily-goal bonus (ADR-033) is part of each day's XP above; the goals list stays empty
+  // until goal targets are defined.
   const today = xpDay(new Date(), timezone);
   const activeDates = [...days.values()].filter((day) => day.workouts > 0 || day.distanceKm > 0 || day.steps > 0)
     .map((day) => day.date).sort();
@@ -115,7 +108,7 @@ export async function readProgress(userId: string): Promise<{ days: Map<string, 
   const lastQualifyingDate = activeDates.at(-1) ?? null;
   const streak: Streak = { current, longest, lastQualifyingDate,
     todayStatus: active.has(today) ? "done" : active.has(yesterday) ? "at_risk" : "none" };
-  return { days, streak, timezone, xp: xpSummary.xp, byDay: xpSummary.byDay, xpBreakdown: xpSummary.breakdown };
+  return { days, streak, timezone, xp: xpSummary.xp, byDay: xpSummary.byDay, xpBySource: xpByCategory(xpEntries) };
 }
 
 export function progressDay(data: Awaited<ReturnType<typeof readProgress>>, date: string, isToday: boolean): DayRow & {
@@ -142,22 +135,15 @@ export function progressTotals(rows: DayRow[]) {
   return { ...totals, activeDays: rows.filter((day) => day.workouts > 0 || day.distanceKm > 0 || day.steps > 0).length };
 }
 
-export function levelForXp(totalXp: number) {
-  const level = Math.floor(totalXp / 2000) + 1;
-  const xpForCurrentLevel = (level - 1) * 2000;
-  const xpForNextLevel = level * 2000;
-  return { level, currentXP: totalXp, xpForCurrentLevel, xpForNextLevel,
-    progress: (totalXp - xpForCurrentLevel) / (xpForNextLevel - xpForCurrentLevel) };
-}
+export const levelForXp = xpLevel;
 
-function xpBySource(lines: XpLine[]): Record<string, number> {
-  const bySource: Record<string, number> = { run: 0, exercise: 0, campus: 0, challenge: 0 };
-  for (const line of lines) {
-    const source = line.reason.startsWith("run_") || line.reason === "territory_captured" ? "run"
-      : line.reason.startsWith("exercise_") ? "exercise"
-        : line.reason === "challenge completed" ? "challenge" : "campus";
-    bySource[source] = (bySource[source] ?? 0) + line.xp;
-  }
+/** The app's original four sources are always present; social and daily_goal appear once earned,
+ *  so the values still add up to totalXp. */
+function xpBySource(byCategory: Record<XpCategory, number>): Record<string, number> {
+  const bySource: Record<string, number> = { run: byCategory.run, exercise: byCategory.exercise,
+    campus: byCategory.campus, challenge: byCategory.challenge };
+  if (byCategory.social !== 0) bySource["social"] = byCategory.social;
+  if (byCategory.daily_goal !== 0) bySource["daily_goal"] = byCategory.daily_goal;
   return bySource;
 }
 
@@ -172,7 +158,7 @@ export async function xpCompatibilitySummary(userId: string) {
     level: levelForXp(data.xp),
     today: data.days.get(today)?.xp ?? data.byDay[today] ?? 0,
     week: progressTotals(weekDays).xp,
-    bySource: xpBySource(data.xpBreakdown),
+    bySource: xpBySource(data.xpBySource),
   };
 }
 

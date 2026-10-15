@@ -91,4 +91,3 @@ export type BadgeKind =
 
 export type StickerKind = 'no-days-off' | 'squirrel-flex' | 'neon-heart' | 'crown' | 'fire' | 'good-vibes' | 'one-more-km' | 'hydrate';
 
-export type RewardArtKind = 'outfit' | 'badge' | 'stickers' | 'trail' | 'coins' | 'chest';

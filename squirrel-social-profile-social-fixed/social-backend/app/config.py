@@ -132,7 +132,7 @@ def get_settings() -> Settings:
         jwt_algorithms=tuple(a.strip() for a in algorithms.split(",") if a.strip()),
         jwt_issuer=_opt("SOCIAL_JWT_ISSUER"),
         jwt_audience=_opt("SOCIAL_JWT_AUDIENCE"),
-        run_module_url=(_opt("SOCIAL_RUN_MODULE_URL") or "").rstrip("/") or None,
+        run_module_url=(_opt("SOCIAL_RUN_MODULE_URL") or _opt("RUN_MODULE_URL") or _opt("RUN_API_URL") or "").rstrip("/") or None,
         run_module_timeout_s=float(os.environ.get("SOCIAL_RUN_MODULE_TIMEOUT_S", "4")),
         internal_token=_opt("SOCIAL_INTERNAL_TOKEN"),
         xp_cache_ttl_s=_int("SOCIAL_XP_CACHE_TTL_S", 300),
@@ -167,6 +167,7 @@ def get_settings() -> Settings:
         reminders_enabled=os.environ.get("SOCIAL_EVENT_REMINDERS", "on").lower() not in ("off", "0", "false"),
         push_receipts_enabled=os.environ.get("SOCIAL_PUSH_RECEIPTS", "on").lower() not in ("off", "0", "false"),
         event_reminder_minutes=_int("SOCIAL_EVENT_REMINDER_MINUTES", 60),
-        ambassador_open=os.environ.get("SOCIAL_AMBASSADOR_OPEN", "off").lower() not in ("off", "0", "false"),
+        # Opens only on an explicit yes: an empty or misspelled value keeps applications closed.
+        ambassador_open=os.environ.get("SOCIAL_AMBASSADOR_OPEN", "off").strip().lower() in ("on", "1", "true", "yes"),
         ambassador_reapply_days=_int("SOCIAL_AMBASSADOR_REAPPLY_DAYS", 30),
     )

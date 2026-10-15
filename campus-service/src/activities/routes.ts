@@ -27,6 +27,7 @@ import { getZone, serializeZone } from '../zones/repo.js';
 import { getTerritory, territoryOut } from '../territory/repo.js';
 import { actionsFor } from '../territory/service.js';
 import { touchPresenceActivity } from '../presence/service.js';
+import { onPresenceActivityChanged } from '../bubble/service.js';
 
 const CreateBody = z.object({
   type: z.enum(['run', 'walk']).default('run'),
@@ -83,7 +84,10 @@ export async function activityRoutes(app: FastifyInstance) {
       }
       return (await getActivity(a.id, tx))!;
     });
-    if (!points) await touchPresenceActivity(user.id, activity.id, type, activity.started_at).catch(() => undefined);
+    if (!points) {
+      await touchPresenceActivity(user.id, activity.id, type, activity.started_at).catch(() => undefined);
+      await onPresenceActivityChanged(user.id, true);
+    }
     reply.code(201);
     return { activity_id: activity.id, run_id: activity.id, ...serializeActivity(activity) };
   });
@@ -143,7 +147,8 @@ export async function activityRoutes(app: FastifyInstance) {
       );
       await enqueueVerification(id, tx);
     });
-    await query(`UPDATE presence SET activity_id = NULL, activity_type = NULL, activity_started_at = NULL WHERE user_id = $1 AND activity_id = $2`, [user.id, id]).catch(() => undefined);
+    const ended = await query(`UPDATE presence SET activity_id = NULL, activity_type = NULL, activity_started_at = NULL WHERE user_id = $1 AND activity_id = $2`, [user.id, id]).catch(() => null);
+    if (ended?.rowCount) await onPresenceActivityChanged(user.id, false);
     return { activity_id: id, status: 'PENDING' as const, replayed: false };
   });
 

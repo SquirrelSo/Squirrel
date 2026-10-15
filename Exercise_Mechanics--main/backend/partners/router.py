@@ -15,6 +15,7 @@ and per viewer (backend/card_ids.py), and the routes that act on a card take tha
     POST   /api/users/{id}/partner-hunt/requests/{request_id}/accept   → connection
     POST   /api/users/{id}/partner-hunt/requests/{request_id}/decline  → 204, silent
     DELETE /api/users/{id}/partner-hunt/requests/{request_id}          → 204, the sender takes it back
+    DELETE /api/users/{id}/partner-hunt/connections/{request_id}       → 204, either side removes a buddy, silently
 
 Errors carry a machine-readable `code` in `detail` (see service.py) so the client can say exactly
 what stands between the user and the board.
@@ -144,6 +145,12 @@ def post_decline_partner_request(user_id: str, request_id: str) -> Response:
 @router.delete("/users/{user_id}/partner-hunt/requests/{request_id}", status_code=204)
 def delete_partner_request(user_id: str, request_id: str) -> Response:
     _call(connect.withdraw, _checked(user_id), request_id)
+    return Response(status_code=204)
+
+
+@router.delete("/users/{user_id}/partner-hunt/connections/{request_id}", status_code=204)
+def delete_partner_connection(user_id: str, request_id: str) -> Response:
+    _call(connect.remove_connection, _checked(user_id), request_id)
     return Response(status_code=204)
 
 

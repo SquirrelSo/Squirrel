@@ -39,6 +39,10 @@ LIMITS: dict[str, tuple[int, int]] = {
     "dates:dismiss": (60, 3600),
     "block": (30, 3600),
     "ambassador": (3, 86400),
+    "ambassador:submit": (10, 3600),
+    "ambassador:admin": (120, 60),
+    "announcement": (5, 3600),
+    "notifications:prefs": (30, 60),
 }
 
 

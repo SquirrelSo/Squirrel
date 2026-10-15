@@ -118,13 +118,28 @@ export async function emitFromBatch(runId: string | null, eventIds: string[]): P
 }
 
 export async function emitPending(limit: number = 500): Promise<{ enqueued: number }> {
-  const res = await pool.query(
+  const res = await pool.query<OutboxRow>(
     "SELECT * FROM notification_outbox WHERE enqueued_at IS NULL ORDER BY created_at ASC LIMIT $1",
     [limit]
   );
-  
+  return enqueueRows(res.rows);
+}
+
+/** Enqueue specific pending outbox rows (e.g. a level-up written by the XP award route). */
+export async function enqueueOutboxIds(ids: string[]): Promise<{ enqueued: number }> {
+  if (ids.length === 0) return { enqueued: 0 };
+  const res = await pool.query<OutboxRow>(
+    "SELECT * FROM notification_outbox WHERE enqueued_at IS NULL AND id = ANY($1) ORDER BY created_at ASC",
+    [ids]
+  );
+  return enqueueRows(res.rows);
+}
+
+type OutboxRow = { id: string; user_id: string; event_type: string; created_at: Date; payload: Record<string, unknown> };
+
+async function enqueueRows(rows: OutboxRow[]): Promise<{ enqueued: number }> {
   let enqueued = 0;
-  for (const row of res.rows) {
+  for (const row of rows) {
     const notifEvent: NotificationEvent = {
       id: row.id,
       user_id: row.user_id,

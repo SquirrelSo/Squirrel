@@ -12,7 +12,7 @@ const MAX_CELLS = 500;
 
 type HeatmapRow = { lat: number; lng: number; user_count: number };
 
-function intensityFor(users: number): 'low' | 'medium' | 'high' {
+export function intensityFor(users: number): 'low' | 'medium' | 'high' {
   // Coarse distinct-user bands only; the exact internal count never crosses the API boundary.
   if (users < 5) return 'low';
   if (users < 10) return 'medium';

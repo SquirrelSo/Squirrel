@@ -3,11 +3,13 @@
  * that the partner joined, got ready or did a rep — those only arrive from the server (socket, or a
  * 2 s poll while it's down). Your own rep count is yours (you tap it) and is reported up with a
  * per-session `seq` that goes up on every tap and undo, so retries and undo are both safe.
+ * Who earned XP for the race is the server's alone: it arrives once, in workout.session.completed.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '@/api/client';
 import { sharedWorkoutApi, sharedWorkoutErrorCode, subscribeSession } from '@/api/sharedWorkout';
-import { applyReps, clockOffset, mySeat, secondsUntil, theirSeat, type LinkState, type SharedWorkoutSession } from '@/logic/sharedWorkout';
+import type { SharedWorkoutCompleted } from '@/api/featureContracts';
+import { applyCancelled, applyInvited, applyReps, clockOffset, mySeat, secondsUntil, theirSeat, type LinkState, type SessionUpdate, type SharedWorkoutSession } from '@/logic/sharedWorkout';
 
 export type Connection = 'connecting' | 'live' | 'reconnecting' | 'lost';
 
@@ -22,6 +24,7 @@ export function useSharedWorkout(sessionId: string, enabled = true) {
   const [offset, setOffset] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [myReps, setMyReps] = useState(0);
+  const [completed, setCompleted] = useState<SharedWorkoutCompleted | null>(null);
   const seq = useRef(0);
   const repsRef = useRef(0);
   const troubleSince = useRef<number | null>(null);
@@ -76,7 +79,14 @@ export function useSharedWorkout(sessionId: string, enabled = true) {
   useEffect(() => {
     if (!loaded) return;
     const onState = (st: LinkState) => (st === 'trouble' ? trouble() : st === 'connecting' ? setConn('connecting') : healthy());
-    return subscribeSession(sessionId, (u) => (u.kind === 'session' ? accept(u.session) : setSession((s) => (s ? applyReps(s, u.update) : s))), onState);
+    const onUpdate = (u: SessionUpdate) => {
+      if (u.kind === 'session') accept(u.session);
+      else if (u.kind === 'reps') setSession((s) => (s ? applyReps(s, u.update) : s));
+      else if (u.kind === 'invited') setSession((s) => (s ? applyInvited(s, u.update) : s));
+      else if (u.kind === 'cancelled') setSession((s) => (s ? applyCancelled(s, u.update) : s));
+      else if (u.update.session_id === sessionId) setCompleted(u.update);
+    };
+    return subscribeSession(sessionId, onUpdate, onState);
   }, [sessionId, loaded, accept, trouble, healthy]);
 
   // A 250 ms clock, read against the server's (offset from server_time).
@@ -152,5 +162,11 @@ export function useSharedWorkout(sessionId: string, enabled = true) {
       return act(() => sharedWorkoutApi.complete(sessionId, repsRef.current, seq.current));
     },
     leave: () => act(() => sharedWorkoutApi.leave(sessionId)),
+    /** The settled race (who finished, who the server rewarded), when this screen saw it settle. */
+    completed,
+    /** Host, lobby: invite one of your Partner Hunt buddies by their Social profile id. */
+    invite: (socialProfileId: string) => act(() => sharedWorkoutApi.invite(sessionId, socialProfileId)),
+    /** Host, before the countdown: closes the lobby for everyone. */
+    cancel: () => act(() => sharedWorkoutApi.cancel(sessionId)),
   };
 }

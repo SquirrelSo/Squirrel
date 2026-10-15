@@ -13,9 +13,8 @@
  *                 submitActivity (fixes the server's ingest check would refuse are dropped first),
  *                 meetups / meetup (GET /v1/meetups, GET /v1/meetups/{id}: host + invitees → Meetup)
  *   same shape    meetupRating / rateMeetup (GET /v1/meetups/{id}/rating, POST /v1/meetups/{id}/ratings)
- *   same shape    checkIn (POST /v1/meetups/{id}/check-in → CheckInResult). Check-in isn't stored as
- *                 meetup state: GET /v1/meetups/{id} has no my_check_in_at, so a reopened meetup offers
- *                 Check in again, and the server replays the first check-in (same checked_in_at).
+ *   same shape    checkIn (POST /v1/meetups/{id}/check-in → CheckInResult). GET /v1/meetups/{id} carries
+ *                 my_check_in_at; a repeated check-in replays the first one (same checked_in_at).
  */
 import { ApiError } from '@/api/client';
 import { restClient } from '@/api/campus/http';
@@ -120,8 +119,8 @@ export function makeCampusServiceApi(base: string): CampusServicePart {
       const [m, me] = await Promise.all([send<CampusMeetup>(`/v1/meetups/${id(meetupId)}/${action}`, 'POST', {}), meId()]);
       return meetupFromCampus(m, me);
     },
-    // 1 h before → 6 h after the start; checking in turns an invited guest into an attendee (which the
-    // rating gate tests). Safety-contact semantics: features.meetup_safety_notifications.
+    // 1 h before → 6 h after the start; checking in turns an invited guest into an attendee and confirms
+    // a proposed meetup (the rating gate needs both). Safety-contact semantics: features.meetup_safety_notifications.
     checkIn: (meetupId, notifySafetyContact) => send<T.CheckInResult>(`/v1/meetups/${id(meetupId)}/check-in`, 'POST', { notify_safety_contact: notifySafetyContact }),
     meetupRating: (meetupId) => get<T.MeetupRatingState>(`/v1/meetups/${id(meetupId)}/rating`),
     rateMeetup: (meetupId, input, key) => send<T.MeetupRatingResult>(`/v1/meetups/${id(meetupId)}/ratings`, 'POST', { ...input, idempotency_key: key }),

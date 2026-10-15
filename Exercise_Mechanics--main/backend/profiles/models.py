@@ -178,8 +178,9 @@ _INDIAN_MOBILE = re.compile(r"^\+91[6-9]\d{9}$")  # E.164
 
 
 class ProfileDetailsIn(BaseModel):
-    """The app's "About you" form (PUT /api/me/profile-details), field for field. The rules are
-    campus-service's (its migration 004, src/users/details.ts), so the two agree while both exist.
+    """The app's "About you" form (PUT /api/me/profile-details), field for field. The rules are the
+    ones campus-service used before ADR-032 moved these details here (its migration 004) and the app's
+    own checks (mobile-4/src/logic/profileValidation.ts).
     Checks against the account (age, college_email, the two emails differing) are in
     service.save_profile_details."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

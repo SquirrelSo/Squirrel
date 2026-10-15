@@ -1,4 +1,4 @@
-"""Partner Hunt Connect requests in PostgreSQL (migration 008). Used instead of partner_requests.json
+"""Partner Hunt Connect requests in PostgreSQL (migrations 008, 009). Used instead of partner_requests.json
 whenever DATABASE_URL is set; partners/requests_store.py picks one or the other."""
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ from datetime import datetime
 
 import psycopg
 
-_COLUMNS = "request_id, from_user, to_user, status, created_at, expires_at, decided_at"
+_COLUMNS = "request_id, from_user, to_user, status, created_at, expires_at, decided_at, removed_at, removed_by"
 
 
 class Tx:
@@ -29,12 +29,16 @@ class Tx:
 
     def insert(self, row: dict) -> None:
         self.conn.execute(
-            f"INSERT INTO partner_requests ({_COLUMNS}) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            tuple(row[k] for k in _COLUMNS.split(", ")))
+            f"INSERT INTO partner_requests ({_COLUMNS}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            tuple(row.get(k) for k in _COLUMNS.split(", ")))
 
     def set_status(self, request_id: str, status: str, decided_at: datetime) -> None:
         self.conn.execute("UPDATE partner_requests SET status = %s, decided_at = %s WHERE request_id = %s",
                           (status, decided_at, request_id))
+
+    def mark_removed(self, request_id: str, removed_by: str, removed_at: datetime) -> None:
+        self.conn.execute("UPDATE partner_requests SET status = 'removed', removed_at = %s, removed_by = %s "
+                          "WHERE request_id = %s", (removed_at, removed_by, request_id))
 
 
 def lock(conn: psycopg.Connection, key: str) -> None:

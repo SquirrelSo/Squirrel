@@ -70,12 +70,13 @@ describe("XP routes", () => {
     const res = await fastify.inject({ method: "GET", url: "/v1/users/me/xp", headers: bearer(await userToken(ana)) });
     expect(res.statusCode).toBe(200);
     const body = res.json<MeXp>();
-    expect(body.xp).toBe(125 + 50); // her run and her 25 counted reps; not the other user's run
+    expect(body.xp).toBe(125 + 50 + 30); // her run, her 25 counted reps and the day's goal; not the other user's run
     expect(body.breakdown).toEqual([
       { reason: "run_completed", xp: 50 },
       { reason: "run_distance", xp: 50 },
       { reason: "territory_captured", xp: 25 },
       { reason: "exercise_session", xp: 50 },
+      { reason: "daily_goal", xp: 30 },
     ]);
     expect(typeof body.updated_at).toBe("string");
   });
@@ -94,13 +95,13 @@ describe("XP routes", () => {
     const xp = await fastify.inject({ method: "GET", url: `/v1/users/${bob}/xp`, headers: service });
     expect(xp.statusCode).toBe(200);
     const status = xp.json<UserXp>();
-    expect(status.xp).toBe(70);
+    expect(status.xp).toBe(70 + 30); // run + daily goal
     expect(Number.isNaN(Date.parse(status.updatedAt ?? ""))).toBe(false); // when the row was recorded
 
-    const pass = await fastify.inject({ method: "GET", url: `/v1/users/${bob}/xp-gate?minXP=70`, headers: service });
+    const pass = await fastify.inject({ method: "GET", url: `/v1/users/${bob}/xp-gate?minXP=100`, headers: service });
     expect(pass.statusCode).toBe(200);
     expect(pass.body).toBe("true");
-    const fail = await fastify.inject({ method: "GET", url: `/v1/users/${bob}/xp-gate?minXP=100`, headers: service });
+    const fail = await fastify.inject({ method: "GET", url: `/v1/users/${bob}/xp-gate?minXP=101`, headers: service });
     expect(fail.body).toBe("false");
 
     const nobody = await fastify.inject({ method: "GET", url: `/v1/users/${crypto.randomUUID()}/xp`, headers: service });
@@ -134,7 +135,7 @@ describe("XP routes", () => {
   it("GET /v1/leaderboard/xp ranks XP earned today and this week, after the caps", async () => {
     const now = Date.now();
     const [ana, ben, cai] = [newUser(), newUser(), newUser()];
-    // today: ana 20 km (capped at 150), ben 5 km (100), cai nothing today but 3 days ago
+    // today: ana 20 km (capped at 150), ben 5 km (100), cai nothing today but 3 days ago; each + the 30 daily goal
     await addRun(ana, new Date(now - 60_000), { distance_m: 20_000, territory_claimed: false, rejection_reason: null });
     await addRun(ben, new Date(now - 60_000), { distance_m: 5000, territory_claimed: false, rejection_reason: null });
     await addRun(cai, new Date(now - 3 * 86_400_000), { distance_m: 30_000, territory_claimed: false, rejection_reason: null });
@@ -143,18 +144,19 @@ describe("XP routes", () => {
     expect(daily.statusCode).toBe(200);
     const d = daily.json<Board>();
     const mine = d.entries.filter((e) => [ana, ben, cai].includes(e.user_id));
-    expect(mine.map((e) => [e.user_id, e.xp])).toEqual([[ana, 150], [ben, 100]]);
-    expect(d.me).toMatchObject({ user_id: ben, xp: 100 });
+    expect(mine.map((e) => [e.user_id, e.xp])).toEqual([[ana, 180], [ben, 130]]);
+    expect(d.me).toMatchObject({ user_id: ben, xp: 130 });
     expect(mine[0]!.rank).toBeLessThan(mine[1]!.rank);
 
     const weekly = (await fastify.inject({ method: "GET", url: "/v1/leaderboard/xp?window=weekly&limit=1000", headers: bearer(await userToken(cai)) })).json<Board>();
-    expect(weekly.entries.find((e) => e.user_id === cai)?.xp).toBe(150);
-    expect(weekly.me).toMatchObject({ user_id: cai, xp: 150 });
+    expect(weekly.entries.find((e) => e.user_id === cai)?.xp).toBe(180);
+    expect(weekly.me).toMatchObject({ user_id: cai, xp: 180 });
   });
 
   it("GET /v1/leaderboard/xp checks its input and needs a user", async () => {
     const token = await userToken(newUser());
-    expect((await fastify.inject({ method: "GET", url: "/v1/leaderboard/xp?window=monthly", headers: bearer(token) })).statusCode).toBe(400);
+    // monthly became a window in ADR-033; anything else is still refused
+    expect((await fastify.inject({ method: "GET", url: "/v1/leaderboard/xp?window=yearly", headers: bearer(token) })).statusCode).toBe(400);
     expect((await fastify.inject({ method: "GET", url: "/v1/leaderboard/xp?limit=0", headers: bearer(token) })).statusCode).toBe(400);
     expect((await fastify.inject({ method: "GET", url: "/v1/leaderboard/xp" })).statusCode).toBe(401);
     const empty = (await fastify.inject({ method: "GET", url: "/v1/leaderboard/xp", headers: bearer(token) })).json<Board>();

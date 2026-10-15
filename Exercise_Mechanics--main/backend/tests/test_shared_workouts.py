@@ -546,8 +546,9 @@ def test_the_lobby_closes_only_when_everyone_has_left(clock, social):
 
 def test_leaving_the_race_ends_only_your_race(clock, social):
     s = racing(clock)
+    clock.advance(2)
     reps(s, HOST, 7, 7)
-    clock.advance(10)
+    clock.advance(8)
     r = leave(s, HOST).json()
     assert r["phase"] == "racing" and r["you"] == "host"
     assert r["host"]["left_at"] == "2026-10-05T10:00:13.000Z" and r["host"]["left_reason"] == "left"
@@ -601,21 +602,25 @@ def test_a_restart_never_ends_a_race(clock, social):
     assert v["host"]["left_at"] is None    # the host is counted as seen when first looked at
 
 
-# --- no XP -----------------------------------------------------------------------------------------
+# --- XP: a flat award per finished race, never per rep, and no activity ------------------------------
 
-def test_a_hand_tapped_race_writes_no_xp_and_no_activity(clock, social, monkeypatch):
+def test_a_hand_tapped_race_writes_no_activity_and_xp_only_through_the_run_module(clock, social, monkeypatch,
+                                                                                  fake_run_module):
     published = []
     monkeypatch.setattr(social_publish, "publish", lambda row: published.append(row))
     s = racing(clock, duration=60)
+    clock.advance(10)
     reps(s, HOST, 30, 30)
     reps(s, JOINER, 28, 28)
-    clock.advance(61)
+    clock.advance(51)
     done = get(s, HOST).json()
     assert done["phase"] == "finished" and done["rep_source"] == "hand_tapped" and "xp_awarded" not in done
     assert published == []
-    # Social was only asked for names and blocks: no activity, no XP award.
-    assert all(path == "/internal/v1/people/resolve" or path.startswith("/internal/v1/blocks/")
-               for _, path, _ in social.requests)
+    # The same 20 XP each, whatever the rep count: never per rep.
+    assert sorted((a["subject"], a["amount"]) for a in fake_run_module.awards) == [(HOST, 20), (JOINER, 20)]
+    # Social was asked for names and blocks, and told the race is over: no activity.
+    assert all(path in ("/internal/v1/people/resolve", "/internal/v1/notifications")
+               or path.startswith("/internal/v1/blocks/") for _, path, _ in social.requests)
 
 
 # --- storage ---------------------------------------------------------------------------------------
