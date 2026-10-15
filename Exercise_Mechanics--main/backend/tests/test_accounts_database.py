@@ -24,6 +24,7 @@ from backend.partners import service as partners
 from backend.partners import store as partner_store
 from backend.profiles import store as profile_store
 from backend.profiles.service import onboard
+from backend.tests.db_reset import drop_exercise_tables
 from backend.users.store import read_profile, read_skill, write_skill
 
 TEST_URL = os.environ.get("TEST_DATABASE_URL", "")
@@ -37,9 +38,7 @@ CORE = {"first_name": "Ana", "last_name": "Tester", "gender": "female", "height_
 def db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "USERS_DIR", tmp_path / "users")
     with psycopg.connect(TEST_URL, autocommit=True) as conn:
-        conn.execute("DROP TABLE IF EXISTS exercise_sessions, activity_types, user_refresh_tokens, user_accounts, "
-                     "user_profile_data, user_personal_details, user_profiles, auth_throttle, "
-                     "email_verification_codes, partner_hunt_preferences, schema_migrations CASCADE")
+        drop_exercise_tables(conn)
     with psycopg.connect(TEST_URL, autocommit=True) as conn:
         migrate(conn)
     monkeypatch.setenv("DATABASE_URL", TEST_URL)

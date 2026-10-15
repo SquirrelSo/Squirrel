@@ -202,7 +202,7 @@ export default function SignIn() {
           ) : (
             <>
               <Text style={styles.sent}>Code sent to {email.trim()}</Text>
-              <TextInput style={[styles.input, styles.code]} value={code} onChangeText={setCode} placeholder="6-digit code" placeholderTextColor={colors.mute} keyboardType="number-pad" maxLength={8} autoComplete="one-time-code" accessibilityLabel="Sign-in code" />
+              <TextInput style={[styles.input, styles.code]} value={code} onChangeText={(t) => setCode(t.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit code" placeholderTextColor={colors.mute} keyboardType="number-pad" maxLength={7} autoComplete="one-time-code" accessibilityLabel="Sign-in code" />
               {newAccount && (
                 <>
                   <Text style={styles.lead}>New here — what should we call you?</Text>
@@ -216,7 +216,8 @@ export default function SignIn() {
               <Button
                 label={busy ? 'Checking…' : newAccount ? 'Join' : 'Sign in'}
                 icon="arrow-right"
-                disabled={busy || code.trim().length < 4 || (newAccount && !firstName.trim())}
+                // Exercise accepts exactly six digits (auth/router.py); anything else is a raw 422.
+                disabled={busy || !/^\d{6}$/.test(code) || (newAccount && !firstName.trim())}
                 onPress={() => run(() => auth.verifyEmailCode(email, code, newAccount ? { first_name: firstName.trim(), last_name: lastName.trim() } : undefined, invite))}
               />
               <Text style={styles.link} onPress={() => { setCodeSent(false); setCode(''); }}>Use a different email</Text>

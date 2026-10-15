@@ -13,7 +13,7 @@ GPS tracking, territory marking, territory maintenance, and leaderboard backend.
 | Cache | Redis 7 |
 | Queue | BullMQ (backed by Redis) |
 | ORM | **None** — raw SQL via `pg`, queries in `db/queries/` |
-| Mobile | Native Swift (iOS) + Kotlin (Android) |
+| Client | The Expo app in `../mobile-4` (React Native). No native Swift/Kotlin client exists |
 
 ---
 
@@ -55,7 +55,6 @@ run-module/
 │   └── decisions/          # Architecture Decision Records (ADRs)
 ├── infra/
 │   └── docker-compose.yml  # Local dev: Postgres + Redis
-└── (mobile/ native Swift/Kotlin stubs now live in backup/run-module-mobile/ at the repo root)
 ```
 
 ---
@@ -149,17 +148,33 @@ See [`.env.example`](.env.example) for all required variables.
 | `NODE_ENV` | `development` \| `test` \| `production` |
 | `LOG_LEVEL` | Pino log level (`info`, `debug`, etc.) |
 | `XP_TIMEZONE` | Optional. Day boundary for the XP daily caps when an activity does not carry the phone's own time zone (`metrics.timezone`; default `Asia/Kolkata`) |
+| `RATE_LIMIT_XP_READ_PER_MIN` | Optional. Per-user requests per minute for `GET /v1/xp/stats`, `/v1/xp/history` and `/v1/leaderboard/xp` (default 120) |
 
 ## XP
 
-XP is derived from `activity_sessions` on every read, never stored (rules and reasons:
-[ADR-027](docs/decisions/ADR-027-xp-rules-and-endpoints.md)).
+The Run Module is the only XP ledger (ADR-032). XP is derived on every read, never stored as a
+balance: from `activity_sessions` (runs, exercise sessions and the daily goal), resolved challenge
+wins, and awards other services report (`external_xp_awards`). All daily caps apply on read, the same
+way for every route below. Rules: [ADR-027](docs/decisions/ADR-027-xp-rules-and-endpoints.md)
+(runs, exercise, days) and [ADR-033](docs/decisions/ADR-033-xp-sources-reversal-and-stats.md)
+(award catalogue and caps, reversal, daily goal, challenge cap, stats, history, level-ups).
 
 | Route | Caller | Returns |
 |---|---|---|
 | `GET /v1/users/me/xp` | the signed-in user | `{ xp, updated_at, breakdown: [{ reason, xp }] }` |
+| `GET /v1/xp` | the signed-in user | `{ totalXp, level, today, week, bySource }` (the app's startup shape) |
+| `GET /v1/xp/stats` | the signed-in user | `{ total, level, level_progress: { current_level_xp, next_level_xp, into_level, needed }, today, week, month, by_source }` |
+| `GET /v1/xp/history?limit=&cursor=` | the signed-in user | `{ items: [{ id, amount, source, reason, source_id, created_at, reversed }], next_cursor }`, newest first, `limit` ≤ 100 |
+| `GET /v1/leaderboard/xp?window=daily\|weekly\|monthly&limit=N` | any signed-in user | `{ window, day, entries: [{ rank, user_id, xp }], me, total_ranked }` |
 | `GET /v1/users/:userId/xp` | Exercise Module (service token) | `{ xp, updatedAt }` |
 | `GET /v1/users/:userId/xp-gate?minXP=N` | Exercise Module (service token) | `true` / `false` |
+| `POST /internal/v1/xp/award` | campus-service, Exercise, Social (service token) | the subject's new total (bare integer); 409 on a reused key, 422 on an unknown source/reason or amount |
+| `POST /internal/v1/xp/reverse` | campus-service, Exercise, Social (service token) | the subject's new total (bare integer); 404 for an unknown award |
+| `POST /internal/v1/xp/totals` | any service (service token) | `{ subject: total }` for up to 200 subjects |
+
+Service token: `SOCIAL_INTERNAL_TOKEN` as a bearer, or the Exercise service JWT (ADR-027 §5). Stats,
+history and the XP board are rate-limited per user (`RATE_LIMIT_XP_READ_PER_MIN`, default 120).
+An award or reversal that raises a user's level queues an `xp.level_up` notification for Social.
 
 The server **exits immediately** if any variable is missing — see `src/config/env.ts`.
 

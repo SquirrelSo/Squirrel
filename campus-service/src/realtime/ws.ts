@@ -2,9 +2,9 @@
  * WebSocket endpoint: GET /v1/realtime
  * Protocol (matches mobile/src/api/campus/index.ts):
  *   client → { type: 'auth', token }               first frame; unauthenticated sockets only get public topics
- *   client → { type: 'subscribe', topics: [...] }  topics: territories | stats | invites | events | active | activities | notifications
+ *   client → { type: 'subscribe', topics: [...] }  topics: territories | stats | invites | events | active | activities | notifications | bubble
  *   server → { type: '<event>', data }
- * Private events (invites, activity.verified, notifications) are delivered only to the users they concern.
+ * Private events (invites, activity.verified, notifications, bubble.*) are delivered only to the users they concern.
  */
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
@@ -23,6 +23,8 @@ const TOPIC_OF: Record<string, string> = {
   'challenge.created': 'invites', 'challenge.updated': 'invites',
   'activity.verified': 'activities',
   'notification.created': 'notifications',
+  'bubble.user_joined': 'bubble', 'bubble.user_left': 'bubble',
+  'bubble.activity_started': 'bubble', 'bubble.activity_ended': 'bubble',
 };
 
 export function registerRealtime(app: FastifyInstance) {
@@ -66,7 +68,7 @@ export function registerRealtime(app: FastifyInstance) {
       if (msg.type === 'auth' && typeof msg.token === 'string') {
         try {
           conn.userId = (await verifyBearer(msg.token)).userId;
-          conn.topics.add('invites'); conn.topics.add('activities'); conn.topics.add('notifications');
+          conn.topics.add('invites'); conn.topics.add('activities'); conn.topics.add('notifications'); conn.topics.add('bubble');
           send(conn, { type: 'auth.ok', data: await translateOutbound({ user_id: conn.userId }) });
         } catch {
           send(conn, { type: 'auth.error', data: { code: 'unauthorized' } });

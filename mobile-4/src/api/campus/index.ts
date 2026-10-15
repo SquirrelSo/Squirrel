@@ -219,4 +219,6 @@ export function subscribeRealtime(h: Handler): () => void {
 }
 
 export { CAMPUS_ROUTES } from '@/api/campus/http';
+export { discoverApi, discoverLive, type DiscoverBattle, type DiscoverItem } from '@/api/campus/discover';
+export { bubbleApi, bubbleLive } from '@/api/campus/bubble';
 export type * from '@/api/campus/types';

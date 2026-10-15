@@ -30,6 +30,7 @@ Run from the project root:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -54,6 +55,7 @@ from backend.partners.router import router as partners_router
 from backend.profiles.router import router as profiles_router
 from backend.reports.router import router as reports_router
 from backend.sessions.router import router as sessions_router
+from backend.shared_workouts.router import completion_sweeper as shared_workouts_completion_sweeper
 from backend.shared_workouts.router import router as shared_workouts_router
 from backend.training.builders import validate_training_builders
 from backend.training.router import router as setup_ws_router
@@ -84,7 +86,9 @@ async def _lifespan(_app: FastAPI):
         except Exception:  # noqa: BLE001
             log.exception("[db] could not run migrations; sign-in and profiles are unavailable until "
                           "the database is reachable")
+    completion_sweep = asyncio.get_running_loop().create_task(shared_workouts_completion_sweeper())
     yield
+    completion_sweep.cancel()
     db_connection.close_pools()
 
 

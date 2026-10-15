@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, type Href } from 'expo-router';
-import { campusApi, type AppNotification } from '@/api/campus';
-import { getNotifications, markNotificationsRead } from '@/api/campus/poke';
+import type { AppNotification } from '@/api/campus';
+import { getNotifications, markAllNotificationsRead, markNotificationRead } from '@/api/campus/poke';
 import { PersonAvatar } from '@/components/campus/PersonAvatar';
 import { EmptyNote, ErrorState, LoadingRows } from '@/components/campus/States';
 import { shortTime } from '@/components/campus/territoryUi';
@@ -12,7 +12,7 @@ import { useCampus, useRealtime, useRefreshOnFocus } from '@/hooks/useCampus';
 import { earlierRows, keepOlder } from '@/logic/notificationPages';
 import { useApp } from '@/state/AppState';
 import { setUnread } from '@/state/socialStore';
-import { Button, Header, Icon, Screen } from '@/components/ui';
+import { Button, Header, Icon, IconButton, Screen } from '@/components/ui';
 import { alpha, colors, fonts, radius } from '@/theme';
 
 type IconName = React.ComponentProps<typeof Icon>['name'];
@@ -36,6 +36,15 @@ const KIND: Record<string, Kind> = {
   ambassador: { icon: 'star-four-points-outline', color: colors.violet },
   shared_zone: { icon: 'map-marker-radius', color: colors.primary },
   date_suggestion: { icon: 'map-marker-account-outline', color: colors.secondary },
+  // Routed by kind in the adapter (logic/notificationPrefs.ts kindRoute).
+  'xp.level_up': { icon: 'arrow-up-bold-circle-outline', color: colors.gold, label: 'Level up' },
+  'shared_workout.invited': { icon: 'dumbbell', color: colors.secondary, label: 'Workout invite' },
+  'shared_workout.finished': { icon: 'trophy-outline', color: colors.primary, label: 'Workout results' },
+  'bubble.activity': { icon: 'account-multiple-outline', color: colors.blue, label: 'Your bubble' },
+  'ambassador.task': { icon: 'clipboard-check-outline', color: colors.violet, label: 'Ambassador task' },
+  'ambassador.reward': { icon: 'star-four-points', color: colors.gold, label: 'Ambassador reward' },
+  'ambassador.suspended': { icon: 'pause-circle-outline', color: colors.coral, label: 'Ambassador role paused' },
+  'system.announcement': { icon: 'bullhorn-outline', color: colors.primary, label: 'Announcement' },
 };
 const FALLBACK: Kind = { icon: 'bell-outline', color: colors.dim };
 
@@ -53,7 +62,8 @@ const kindOf = (n: AppNotification): Kind => (n.type === 'territory' ? territory
  * Notifications: pokes (with POKE BACK), friendships, territory alerts and campus activity from the
  * backend. Without a backend the list says "Not live yet" — there are no sample notifications.
  * The newest page is grouped (people first); "Show older" pages back through the rest with the
- * server's cursor, in time order under "Earlier".
+ * server’s cursor, in time order under "Earlier". A tap marks one row read; "Mark all read" the rest.
+ * The gear opens notification settings.
  */
 export default function Notifications() {
   return <CampusNotifications />;
@@ -83,27 +93,30 @@ function CampusNotifications() {
   useRealtime((m) => {
     if (m.type === 'notification.created' && r.data) r.mutate({ ...r.data, items: [m.data, ...r.data.items.filter((n) => n.id !== m.data.id)], unread: r.data.unread + 1 });
   });
-  // Opening the list marks what you've seen as read (the backend keeps the truth).
   const earlier = older && r.data ? earlierRows(older.kept, r.data.items) : [];
-  const unreadIds = [...(r.data?.items ?? []), ...earlier].filter((n) => !n.read).map((n) => n.id).join(',');
+  // The badge follows the server's count; rows are read one at a time (a tap) or all at once.
+  const serverUnread = r.data?.unread;
   useEffect(() => {
-    if (!unreadIds) {
-      if (r.data) setUnread(0);
-      return;
-    }
-    const t = setTimeout(() => {
-      markNotificationsRead(unreadIds.split(','))
-        .then((x) => setUnread(x.unread))
-        .catch(() => undefined);
-    }, 1200);
-    return () => clearTimeout(t);
-  }, [unreadIds, r.data]);
+    if (serverUnread != null) setUnread(serverUnread);
+  }, [serverUnread]);
+
+  /** A tap on an unread row: shown read straight away; the server's count comes back with it. */
+  const readOne = (n: AppNotification) => {
+    if (n.read) return;
+    const asRead = (list: AppNotification[]) => list.map((x) => (x.id === n.id ? { ...x, read: true } : x));
+    if (r.data) r.mutate({ ...r.data, items: asRead(r.data.items), unread: Math.max(0, r.data.unread - 1) });
+    setOlder((o) => o && { ...o, kept: asRead(o.kept) });
+    // A failure leaves it unread on the server; the next refresh shows it unread again.
+    markNotificationRead(n.id)
+      .then((x) => setUnread(x.unread))
+      .catch(() => undefined);
+  };
 
   const markAll = async () => {
     if (markingAll) return;
     setMarkingAll(true);
     try {
-      const x = await campusApi.markNotificationsRead([]); // empty = all
+      const x = await markAllNotificationsRead();
       setUnread(x.unread);
       if (r.data) r.mutate({ ...r.data, items: r.data.items.map((n) => ({ ...n, read: true })), unread: x.unread });
       setOlder((o) => o && { ...o, kept: o.kept.map((n) => ({ ...n, read: true })) });
@@ -125,7 +138,12 @@ function CampusNotifications() {
       <Header
         back
         title="Notifications"
-        right={hasUnread ? <Button label="Mark all read" size="sm" variant="ghost" iconLeft="check-all" onPress={markAll} disabled={markingAll} /> : undefined}
+        right={
+          <>
+            {hasUnread && <Button label="Mark all read" size="sm" variant="ghost" iconLeft="check-all" onPress={markAll} disabled={markingAll} />}
+            <IconButton icon="cog-outline" onPress={() => router.push('/notification-settings')} label="Notification settings" />
+          </>
+        }
       />
       <FlatList
         data={[...pokes, ...rest, ...earlier]}
@@ -136,7 +154,7 @@ function CampusNotifications() {
           <View>
             {index === pokes.length && rest.length > 0 && <Text style={[styles.section, { marginTop: 8, marginBottom: 10 }]}>Campus</Text>}
             {index === items.length && <Text style={[styles.section, { marginTop: 8, marginBottom: 10 }]}>Earlier</Text>}
-            <NotificationCard n={item} />
+            <NotificationCard n={item} onOpen={() => readOne(item)} />
           </View>
         )}
         ListFooterComponent={
@@ -168,12 +186,13 @@ function CampusNotifications() {
   );
 }
 
-/** One row. Taps open `data.route` when the backend sent one, else route by type. */
-function NotificationCard({ n }: { n: AppNotification }) {
+/** One row. Taps mark it read and open `data.route` when the backend sent one, else route by type. */
+function NotificationCard({ n, onOpen }: { n: AppNotification; onOpen: () => void }) {
   const locks = useLocks();
   const ui = kindOf(n);
   const territory = n.type === 'territory';
   const open = () => {
+    onOpen();
     const d = n.data ?? {};
     if (typeof d.route === 'string' && d.route.startsWith('/') && !d.route.startsWith('//')) router.push(d.route as Href);
     else if (n.type === 'shared_zone' && d.user_id) router.push({ pathname: '/shared/[id]', params: { id: d.user_id } });
@@ -202,7 +221,7 @@ function NotificationCard({ n }: { n: AppNotification }) {
           </View>
         )}
         <View style={{ flex: 1 }}>
-          {territory && !!ui.label && <Text style={[styles.label, { color: ui.color }]}>{ui.label}</Text>}
+          {!!ui.label && <Text style={[styles.label, { color: ui.color }]}>{ui.label}</Text>}
           <Text style={[styles.text, territory && styles.textStrong]}>{n.text}</Text>
           <Text style={styles.time}>{shortTime(n.created_at)}</Text>
         </View>

@@ -13,8 +13,8 @@ LOBBY_TTL_S = 10 * 60
 COUNTDOWN_S = 3
 
 # Rep reports (and Finish) arriving this long after ends_at still count. Hand taps are throttled to
-# one report every 500 ms, so the last ones are often in flight when time runs out. Hand-tapped
-# races earn nothing, so the margin costs nothing.
+# one report every 500 ms, so the last ones are often in flight when time runs out. They change the
+# result shown, not the XP: that is settled when the race finishes (see XP below).
 REPS_GRACE_S = 5
 
 # "connected": a socket is open, or the player made a request this recently.
@@ -24,6 +24,25 @@ DISCONNECT_AFTER_S = 30
 
 MAX_REPS = 2000
 MAX_SEQ = 2**31 - 1
+
+# Plausibility: a running total above this many reps per second of race time so far (plus a little
+# slack for the first taps) is refused (422 implausible_reps). Nobody does four push-ups a second.
+PLAUSIBLE_REPS_PER_S = 4
+PLAUSIBLE_REPS_SLACK = 5
+
+# Rep reports per user per second (429 rate_limited beyond it). The app throttles to two a second.
+REPS_RATE_PER_S = 5
+
+# Invitations from the host to their Partner Hunt connections (buddies): this many still waiting
+# per session at once.
+MAX_PENDING_INVITES = 3
+
+# XP: a flat shared_workout_finished award (xp_awards.py) to each player who finished the race (did
+# not leave before the end) and reported at least one rep. Never per rep; the Run Module caps it at
+# three a day. Settled once per session, when the race reaches `finished`.
+
+# Races nobody looks at any more (both apps closed) are settled by a background sweep this often.
+COMPLETION_SWEEP_S = 30
 
 # Rep exercises a race can be run on: the app's rep-measured library entries (keys as the app sends
 # them). Timed exercises (high knees, plank) can't be a rep race.

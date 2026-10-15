@@ -199,6 +199,8 @@ def queue(db: Session, messages: list[dict]) -> None:
 
 @event.listens_for(Session, "after_commit")
 def _send_after_commit(session: Session) -> None:
+    if session.in_nested_transaction():  # a SAVEPOINT released (badges.after_activity): not committed yet
+        return
     messages = session.info.pop("pending_push", None)
     sender = session.info.get("push")
     if messages and sender is not None:

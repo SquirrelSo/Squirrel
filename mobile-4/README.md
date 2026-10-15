@@ -135,8 +135,7 @@ zone screen / map sheet say "Approximate outline — not surveyed yet". Claiming
 
 **Not live yet** without campus-service (the screens say so, never invented data): named zones and claim / steal / defend,
 the campus map's base layer and players, presence, pokes and friends, Open to Meet, Active-now
-people, Date Mode, meetups, all-time boards, daily / group challenges (progress-service), and the
-Dev A / Dev B endpoints in `src/api/availability.ts`. Connection mode and "onboarding done" are kept
+people, Date Mode, meetups, all-time boards, and the capabilities in `src/api/availability.ts`. Connection mode and "onboarding done" are kept
 on the device until the Social service has fields for them.
 
 ## Campus social (IISER Kolkata launch)
@@ -214,7 +213,7 @@ Service functions: `api/campus/map.ts` (getMapData, getNearbyUsers, getTerritori
 - Location updates re-render only the "you" marker and the header.
 
 **Reusable components:**
-- `PokeButton`, `NearbyUserCard`, `PokeNotificationCard` and `NearbySquirrels` (in `components/social/`).
+- `PokeButton`, `NearbyUserCard` and `NearbySquirrels` (in `components/social/`). Poke notifications render inline in `app/notifications.tsx`.
 - `SocialHost`, mounted in the root layout, routes realtime events and shows the "You're friends" celebration.
 
 **States:**
@@ -348,32 +347,31 @@ This follows the *Frontend ↔ Backend Compatibility Assessment*.
 | Area | State in the app |
 |---|---|
 | **Install** | `package.json` pins Expo SDK 57 / expo-router 57; the stray `"undefined"` dependency is gone |
-| **Auth** | `src/auth/AuthProvider.tsx`: sign-in screen, token in SecureStore, `Authorization: Bearer` on every call. Needs an account service (`EXPO_PUBLIC_AUTH_URL`) — none exists yet. Until then: demo mode, or paste a developer token |
+| **Auth** | `src/auth/AuthProvider.tsx`: sign-in by emailed code against Exercise (`EXPO_PUBLIC_AUTH_URL`, default `EXPO_PUBLIC_EXERCISE_API_URL`), token in SecureStore, `Authorization: Bearer` on every call to every backend |
 | **API layer** | `src/api/`, matched to the verified Run Module contract: `POST /v1/runs` → `{run_id}`; points in batches of 500 with `seq` (index in the full array), `lng`, `recorded_at`, required `accuracy_m`, and a seq-range `idempotency_key`; `/finish` is async, so the app polls `GET /v1/runs/:id` with backoff until `finalized` / `flagged` / `rejected`. XP comes from `GET /v1/users/me/xp`; the leaderboard uses `scope=global&metric=area&window=…` with `me` + `next_cursor`. 429s are retried after `Retry-After`. Your own leaderboard row is matched by the token's `sub` (`page.me` has no `user_id`). Verification polls for up to 5 min, with a "Don't wait" button after 15 s. Still marked `ASSUMPTION` in `endpoints.ts`: the create request body and leaderboard score units (m²) |
 | **Runs** | Real GPS via `expo-location` (accuracy/jump filtering, auto-pause). Signed in, the run uploads and the **server's** distance, status and territory are shown; XP earned is the before/after difference from `/users/me/xp`. Without GPS (web, or permission denied), a clearly labelled demo simulation runs |
 | **XP** | Local estimate uses the backend's rules (50 + 10/km + 25 territory, 150/day run cap). Signed in, the server total replaces it. Levels are derived client-side (2,000 XP each) |
 | **Anti-cheat** | Run summary shows *accepted / flagged / rejected* (server verdict when live, local plausibility check otherwise) |
 | **Territory** | New `/territory` screen (zones, control %, rivals, contested, 14-day decay) and area-based leaderboard (`/leaderboard`). *Not live yet* until the territory endpoints are wired |
-| **Challenges** | `/challenges` screen (daily, head-to-head, group, special), auto-resolving with no claim. Backed by the progress-service (below); *Not connected* otherwise. Missions stay a separate frontend feature (company decision, §4.3) |
+| **Challenges** | `/challenges` screen: the Run Module's Goals (`GET /v1/challenges/mine`, accept/decline; `src/api/runChallenges.ts`). Missions stay a separate frontend feature (company decision, §4.3) |
 | **Still frontend-only** | Coins, cosmetics, social feed, crews/events, badges. They need backend models (§5) |
 
 To point the app at a backend, copy `.env.example` to `.env`, then set `EXPO_PUBLIC_API_URL` (and `EXPO_PUBLIC_AUTH_URL` when the account service exists).
 
-## Backend integration (progress-service)
+## Progress, XP and boards (ADR-032 owners)
 
-> **Superseded by ADR-032.** No progress-service will be built: its 8 endpoints move into the Run Module, so `EXPO_PUBLIC_PROGRESS_API_URL` is never set. Until `src/api/progress.ts` is repointed at the Run Module, `useDailyProgress` (Home, Missions) and `/challenges` show *Not connected*. The contract below is what that repoint has to serve.
+There is no progress-service (ADR-032 cancelled it). Every read goes to the owner of the number; the app never computes XP.
 
-`../progress-service` owns XP, levels, daily goals, streaks, challenges and XP leaderboards. Set `EXPO_PUBLIC_PROGRESS_API_URL` and sign in; it authenticates the same bearer token, and a token alone is enough to go live when only this service is configured. With it unset, or signed out, those screens show *Not connected* — never demo numbers.
+| Area | Owner and route | App |
+|---|---|---|
+| **Your Progress** (`/progress`) | Run Module `GET /v1/progress`, `/v1/progress/weekly`, `/v1/progress/history?days=366`; `GET /v1/xp/stats` | `src/api/progress.ts`, `src/api/xp.ts`, `src/logic/progressStats.ts` |
+| **Daily progress** (Home, Missions) | Run Module `GET /v1/progress/daily` | `src/hooks/useDailyProgress.ts` |
+| **XP history** (`/xp-history`) | Run Module `GET /v1/xp/history` (keyset cursor) | `src/logic/xpHistory.ts` |
+| **XP board** (`/leaderboard` → XP) | Today / last 7 days: Social `GET /v1/leaderboards/xp` (Run Module numbers + names). This month: Run Module `GET /v1/leaderboard/xp` (ids only, shown as "Squirrel") | `src/logic/xpBoard.ts` |
+| **Goals** (`/challenges`) | Run Module `GET /v1/challenges/mine`, accept/decline | `src/api/runChallenges.ts` |
+| **XP total / level** | Run Module `GET /v1/xp` | `src/state/AppState.tsx` |
 
-| Area | Live behaviour |
-|---|---|
-| **API layer** | `src/api/progress.ts` holds the typed contract (exact response shapes) and calls go through the shared `api()` client with `base: PROGRESS_API_URL` |
-| **Your Progress** (`/progress`) | Today's XP, the goal ring, goals done, streak and level come from `/v1/progress`. Week-over-week comes from `/v1/progress/weekly`, and the Day/Month/Year charts and heatmap from `/v1/progress/history?days=366` (`src/logic/progressStats.ts`). Campus rank comes from `/v1/leaderboards/campus`. It has loading, error (retry) and expired-session (sign in) states. The layout is unchanged |
-| **Challenges** (`/challenges`) | `/v1/challenges` maps onto the existing cards. A **Special** tab appears when there are special challenges. **Join**, **Leave**/**Forfeit**, and **Accept duel**/**Decline** buttons call the server. Results show as Completed, Won, Tie, Lost, Ended, Cancelled or Not eligible. Server error codes become toasts. There are loading, empty-per-tab, error and unauthorized states |
-| **Workouts** | Finishing a form-coach exercise queues a `WORKOUT_COMPLETED` event (key `exercise:<startedAt>:<item>`), flushes it, then re-reads XP from `/v1/xp`. The server decides the XP; the local figure is only the completion-screen estimate |
-| **Offline** | Queued events are stored one per key (SecureStore, or localStorage on web). The queue flushes on sign-in, on app foreground and after each workout. Replays are recognised as duplicates, rejected events are dropped, and network errors, 5xx and 401 keep the queue |
-| **XP source** | When configured, AppState syncs XP from `/v1/xp` instead of the Run Module's `/v1/users/me/xp` |
-| **Not yet sourced** | Steps: the app has no pedometer yet, so `STEP_COUNT` is never sent yet and step goals, step challenges and step duels stay at 0 until a step source (e.g. expo-sensors Pedometer or Health Connect/HealthKit) posts it. The Campus leaderboard screen is still the Run Module's territory board |
+Workouts earn XP through Exercise's own session row and runs through the Run Module; the phone never reports activity for XP. Steps have no source yet, so step goals stay at 0.
 
 ## Architecture
 
@@ -388,7 +386,6 @@ src/
     Product.tsx        20 shop items (hoodie, tee, shoes, bag, bottle, sunglasses, watch…)
     Badge.tsx          12 achievement badges (plus locked state)
     Sticker.tsx        8 die-cut stickers
-    Reward.tsx         Level-reward illustrations (outfit, badge, stickers, trail, coins, chest)
     CityMap.tsx        Stylised city map + animated run route
     palette.ts         Shared art palette so everything belongs to one visual universe
   components/          ui.tsx (primitives + motion), cards.tsx, Avatar, TopBar, TabBar, Sheet, Toast

@@ -6,6 +6,7 @@
                                             → the in-app list + push; returns Social's notification id
   POST /internal/v1/tasks/push-receipts     check Expo push receipts now (for an external cron)
   POST /internal/v1/tasks/event-reminders   send due event reminders now (for an external cron)
+  POST /internal/v1/tasks/ambassador-rewards grant due referral rewards, retry pending XP awards/reversals
   POST /internal/v1/people/resolve          token subjects / profile ids → Social names, profile ids,
                                             avatar, hostel, level (campus-service); unseen subjects
                                             are provisioned like a first sign-in
@@ -28,6 +29,7 @@ POST /v1/posts { activity: { source: "activity", activity_id } }. Never exposed 
 from __future__ import annotations
 
 import hmac
+import re
 import uuid
 from typing import Annotated
 
@@ -39,7 +41,7 @@ from app.auth import bearer_token, get_or_create_user
 from app.db import utcnow
 from app.deps import DB, AppSettings, Storage
 from app.errors import ApiError, conflict
-from app.models import Activity, Crew, CrewMember, Notification, User, UserBlock, UserStats
+from app.models import Activity, AmbassadorProfile, Crew, CrewMember, Notification, User, UserBlock, UserStats
 from app.schemas import InternalActivityOut, InternalActivityIn
 from app.schemas_community import (
     InternalBlocksImportIn,
@@ -62,7 +64,7 @@ from app.schemas_community import (
     RUN_MODULE_KINDS,
 )
 from app.services import notify as notifications
-from app.services import badges, dates, reminders, social, xp_cache
+from app.services import ambassador, badges, dates, reminders, social, xp_cache
 from app.routers.follows import _unfollow
 from app.services.social import insert_ignore
 
@@ -123,6 +125,8 @@ def ingest_activity(
             return InternalActivityOut(activity_id=existing.id, created=False)
         raise conflict("source_ref already belongs to another user.") from None
     social.after_activity_recorded(db, activity, settings)
+    # A referred friend's first activity may make their ambassador's referral reward due.
+    ambassador.after_activity(db, activity)
     # Squirrel Dates: which named zones the run passed (opted-in runners only; never fails the ingest).
     dates.record_visits(db, activity, settings, request.app.state.route_points)
     # Early Bird, Night Owl, Park Regular (after the visits; never fails the ingest either).
@@ -165,7 +169,9 @@ _ACTOR_DATA = {"run_id", "capture_event_id", "user_id", "actor_id", "actor_subje
 
 # Where a tap opens when the caller sends no `data.route` (app screens, see mobile src/app/).
 _ROUTES = {"territory": "/territory", "zone": "/territory", "challenge": "/invites", "event": "/events",
-           "meetup": "/meetups", "activity": "/notifications", "partner": "/partner-hunt"}
+           "meetup": "/meetups", "activity": "/notifications", "partner": "/partner-hunt", "xp": "/progress",
+           "shared_workout": "/workout", "bubble": "/bubble"}
+_PATH_SAFE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def _route(kind: str, data: dict) -> str:
@@ -176,6 +182,10 @@ def _route(kind: str, data: dict) -> str:
         return f"/meetup/{data['meetup_id']}"
     if prefix in ("territory", "zone") and isinstance(data.get("zone_id"), str):
         return f"/zone/{data['zone_id']}"
+    if kind == "shared_workout.invited" and _PATH_SAFE.match(str(data.get("code", ""))):
+        return f"/workout/join/{data['code']}"
+    if kind == "shared_workout.finished" and _PATH_SAFE.match(str(data.get("session_id", ""))):
+        return f"/workout/{data['session_id']}"
     return _ROUTES[prefix]
 
 
@@ -224,6 +234,22 @@ def run_event_reminders(
 ):
     _check_service_token(settings, authorization)
     return {"reminded_events": reminders.send_due(db, settings)}
+
+
+@router.post("/tasks/ambassador-rewards")
+def run_ambassador_rewards(
+    request: Request,
+    db: DB,
+    settings: AppSettings,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    """Grants referral rewards still due (e.g. held back by the daily limit) and retries awards and
+    reversals the Run Module hasn't confirmed (for an external cron)."""
+    _check_service_token(settings, authorization)
+    for (ambassador_id,) in db.execute(select(AmbassadorProfile.user_id).where(AmbassadorProfile.status == "active")).all():
+        ambassador.sweep(db, ambassador_id)
+    db.commit()
+    return {"settled": ambassador.settle(db, request.app.state.run_module, settings)}
 
 
 @router.post("/tasks/push-receipts")

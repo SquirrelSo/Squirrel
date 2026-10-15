@@ -349,3 +349,113 @@ def test_ten_new_requests_a_day_and_twenty_waiting(clock, gate, fake_social):
     assert r.status == 429 and code_of(r) == "too_many_pending"
     api("DELETE", ana, f"/{lists(ana)['outgoing'][0]['request_id']}")
     assert send(ana, others[20]).status == 201
+
+
+# --- buddies: removing a connection, and the XP for connecting ---------------------------------------
+
+def connections_api(method: str, user: str, request_id: str, *, owner: str | None = None, token: bool = True):
+    headers = {"Authorization": f"Bearer {issue_access_token(user)[0]}"} if token else {}
+    return call(app, method, f"/api/users/{owner or user}/partner-hunt/connections/{request_id}", headers=headers)
+
+
+def connected(a: str, b: str) -> str:
+    request_id = send(a, b).json()["request_id"]
+    assert api("POST", b, f"/{request_id}/accept").status == 200
+    return request_id
+
+
+@pytest.mark.parametrize("remover", ["Ana", "Ben"])
+def test_either_side_removes_a_buddy_silently(people, fake_social, remover):
+    ana, ben = people["Ana"], people["Ben"]
+    request_id = connected(ana, ben)
+    notes = len(fake_social.notifications)
+    r = connections_api("DELETE", people[remover], request_id)
+    assert r.status == 204 and r.body == b""
+    assert lists(ana) == lists(ben) == {"incoming": [], "outgoing": [], "connections": []}
+    assert len(fake_social.notifications) == notes                       # silent: nobody is told
+    assert connections_api("DELETE", people[remover], request_id).status == 204   # twice is fine
+    other = ben if remover == "Ana" else ana
+    assert connections_api("DELETE", other, request_id).status == 204
+    assert code_of(api("POST", ben, f"/{request_id}/accept")) == "request_not_found"
+
+
+def test_removal_is_stored_with_who_and_when(people, clock):
+    from backend.partners import requests_store
+
+    request_id = connected(people["Ana"], people["Ben"])
+    clock.advance(hours=1)
+    connections_api("DELETE", people["Ben"], request_id)
+    row = requests_store.get(request_id)
+    assert row["status"] == "removed" and row["removed_by"] == people["Ben"]
+    assert row["removed_at"] == clock.now and row["decided_at"] == T0
+
+
+def test_only_the_two_people_can_remove_a_connection(people):
+    ana, ben, cy = people["Ana"], people["Ben"], people["Cy"]
+    request_id = connected(ana, ben)
+    r = connections_api("DELETE", cy, request_id)
+    assert r.status == 404 and code_of(r) == "connection_not_found"      # IDOR: unknown, not forbidden
+    assert connections_api("DELETE", cy, request_id, owner=ana).status == 403   # someone else's path
+    assert connections_api("DELETE", cy, request_id, token=False, owner=ana).status == 401
+    assert connections_api("DELETE", ana, "not-an-id").status == 404
+    assert connections_api("DELETE", ana, "f" * 32).status == 404
+    pending = send(cy, ana).json()["request_id"]
+    assert code_of(connections_api("DELETE", cy, pending)) == "connection_not_found"   # not a connection yet
+    assert len(lists(ana)["connections"]) == 1
+
+
+def test_after_removal_the_pairs_cooldown_applies_to_both(people, clock):
+    ana, ben = people["Ana"], people["Ben"]
+    request_id = connected(ana, ben)
+    clock.advance(days=40)                         # long after the original request
+    connections_api("DELETE", ana, request_id)
+    for sender, to in ((ana, ben), (ben, ana)):
+        r = send(sender, to)
+        assert r.status == 429 and r.json()["detail"] == {
+            "code": "too_soon", "message": "You can ask them again later.", "retry_after": "2026-12-14T09:00:00Z"}
+    clock.advance(days=30)
+    assert send(ben, ana).status == 201
+
+
+def test_connecting_earns_each_person_buddy_xp_once_per_pair(people, fake_run_module, clock):
+    ana, ben = people["Ana"], people["Ben"]
+    request_id = connected(ana, ben)
+    low, high = sorted((ana, ben))
+    assert sorted(fake_run_module.calls, key=lambda c: c["subject"]) == sorted([
+        {"subject": who, "amount": 20, "reason": "buddy_connected", "source": "exercise",
+         "idempotency_key": f"buddy:{low}:{high}:{who}", "source_id": request_id} for who in (ana, ben)],
+        key=lambda c: c["subject"])
+    assert all(h and h.startswith("Bearer ") for h in fake_run_module.headers)
+    assert api("POST", ben, f"/{request_id}/accept").status == 200          # an idempotent re-accept
+    assert len(fake_run_module.calls) == 2
+    # Removed and connected again later: the same keys, so the Run Module adds nothing.
+    connections_api("DELETE", ana, request_id)
+    clock.advance(days=31)
+    connected(ben, ana)
+    assert len(fake_run_module.calls) == 4 and len(fake_run_module.awards) == 2
+    assert fake_run_module.total(ana) == fake_run_module.total(ben) == 20
+
+
+def test_the_service_token_names_the_exercise_module(people, fake_run_module):
+    from backend.auth.tokens import _b64d
+
+    connected(people["Ana"], people["Ben"])
+    payload = json.loads(_b64d(fake_run_module.headers[0].split()[1].split(".")[1]))
+    assert payload["sub"] == "exercise_module" and payload["typ"] == "service"
+
+
+@pytest.mark.parametrize("failure", ["down", 500, 409])
+def test_a_failed_award_never_fails_the_accept(people, fake_run_module, failure):
+    fake_run_module.failure = failure
+    connected(people["Ana"], people["Ben"])
+    assert len(lists(people["Ana"])["connections"]) == 1
+
+
+def test_without_a_run_module_no_award_is_sent(people, monkeypatch):
+    from backend import xp_awards
+
+    sent = []
+    monkeypatch.setattr(xp_awards, "_urlopen", lambda *a, **k: sent.append(a))
+    monkeypatch.setattr(xp_awards, "_in_background", lambda send: send())
+    connected(people["Ana"], people["Ben"])
+    assert sent == []

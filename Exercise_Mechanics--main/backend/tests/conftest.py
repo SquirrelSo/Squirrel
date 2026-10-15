@@ -19,8 +19,9 @@ import os
 import psycopg
 import pytest
 
-from backend import config, social_blocks, social_notify, social_people
+from backend import config, social_blocks, social_notify, social_people, xp_awards
 from backend.auth import throttle
+from backend.tests.fake_run_module import URL as RUN_URL, FakeRunModule
 from backend.tests.fake_social import TOKEN as SOCIAL_TOKEN, URL as SOCIAL_URL, FakeSocial
 
 ACCOUNTS_DB_URL = os.environ.get("TEST_ACCOUNTS_DATABASE_URL", "")
@@ -57,14 +58,15 @@ def _isolated_auth_storage(tmp_path_factory, monkeypatch, _accounts_database):
     for name in ("SMTP_USER", "SMTP_PASSWORD", "RESEND_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    for name in ("SOCIAL_API_URL", "SOCIAL_INTERNAL_TOKEN"):
+    for name in ("SOCIAL_API_URL", "SOCIAL_INTERNAL_TOKEN", "RUN_MODULE_URL", "RUN_MODULE_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     social_blocks.clear_cache()
     throttle.reset_memory()
-    from backend.shared_workouts import hub, presence
+    from backend.shared_workouts import hub, presence, service as shared_service
 
     hub.reset()
     presence.reset()
+    shared_service.reset_rate_limits()
     if _accounts_database:
         with psycopg.connect(_accounts_database, autocommit=True) as conn:
             conn.execute(f"TRUNCATE {_ACCOUNT_TABLES}")
@@ -83,6 +85,16 @@ def fake_social(monkeypatch) -> FakeSocial:
     monkeypatch.setattr(social_notify, "_urlopen", social)
     monkeypatch.setattr(social_notify, "_in_background", lambda send: send())   # inline, so tests see it
     return social
+
+
+@pytest.fixture
+def fake_run_module(monkeypatch) -> FakeRunModule:
+    """The Run Module's XP award route, recorded in memory (`awards`), sent inline so tests see it."""
+    run = FakeRunModule()
+    monkeypatch.setenv("RUN_MODULE_URL", RUN_URL)
+    monkeypatch.setattr(xp_awards, "_urlopen", run)
+    monkeypatch.setattr(xp_awards, "_in_background", lambda send: send())
+    return run
 
 
 @pytest.fixture

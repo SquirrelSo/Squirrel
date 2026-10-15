@@ -1,5 +1,5 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
-import Fastify from 'fastify';
+import Fastify, { type LightMyRequestResponse } from 'fastify';
 import { challengesRoutes } from './challenges.js';
 import * as jose from 'jose';
 import crypto from 'node:crypto';
@@ -145,4 +145,40 @@ test('POST /v1/challenges validation - rejects unvalidated fields', async () => 
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toContain(err);
   }
+});
+test('POST /v1/challenges caps xp_reward at 200 (ADR-033)', async () => {
+  const base = {
+    type: 'daily', title: 'Reward cap', metric: 'distance_m', comparator: 'gte', threshold: 10,
+    starts_at: '2025-01-01T00:00:00Z', ends_at: '2025-01-02T00:00:00Z'
+  };
+  const post = (xp_reward: number): Promise<LightMyRequestResponse> => fastify.inject({
+    method: 'POST', url: '/v1/challenges', headers: { Authorization: "Bearer " + validToken }, payload: { ...base, xp_reward }
+  });
+  for (const tooMuch of [201, 1000, 1_000_000_000]) {
+    const res = await post(tooMuch);
+    expect(res.statusCode).toBe(422);
+    expect(res.json<{ error: string }>().error).toContain('at most 200');
+  }
+  expect((await post(200)).statusCode).toBe(201);
+});
+
+test('POST /v1/challenges/:id/invite requires invitee_id to be a UUID', async () => {
+  const create = await fastify.inject({
+    method: 'POST', url: '/v1/challenges', headers: { Authorization: "Bearer " + validToken },
+    payload: { type: 'head_to_head', title: 'Invite check', metric: 'distance_m', comparator: 'gte', threshold: 10,
+      starts_at: '2025-01-01T00:00:00Z', ends_at: '2025-01-02T00:00:00Z', xp_reward: 10 }
+  });
+  const id = create.json<{ id: string }>().id;
+  for (const payload of [{ invitee_id: 'not-a-uuid' }, { invitee_id: 42 }, {}, { invitee_id: "'; DROP TABLE challenges; --" }]) {
+    const res = await fastify.inject({
+      method: 'POST', url: `/v1/challenges/${id}/invite`, headers: { Authorization: "Bearer " + validToken }, payload
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toBe('invitee_id must be a UUID');
+  }
+  const ok = await fastify.inject({
+    method: 'POST', url: `/v1/challenges/${id}/invite`, headers: { Authorization: "Bearer " + validToken },
+    payload: { invitee_id: crypto.randomUUID() }
+  });
+  expect(ok.statusCode).toBe(200);
 });

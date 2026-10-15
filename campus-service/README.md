@@ -19,7 +19,7 @@ docker compose up db -d                        # postgis/postgis:16-3.4 on :5432
 cp .env.example .env                           # DATABASE_URL, AUTH_DEV_HS256_SECRET are enough for dev
 npm install
 npm run migrate                                # applies migrations/*.sql once each
-npm run seed                                   # 5 hostels, 16 placeholder zones, 4 dev users, 1 crew
+npm run seed                                   # hostels, the 23 OSM zones (src/seed/zones.osm.json), dev users
 npm run dev                                    # API on :8080 with the verification worker inline
 
 # 3. A dev token (HS256, dev only)
@@ -85,7 +85,7 @@ Deploy order: Social first, then this service.
 5. `REALTIME_PUBLIC_URL=wss://…/v1/realtime`, `CORS_ORIGINS` for any web origins (comma-separated; `https://squirrel-*.vercel.app` style patterns allowed, `*` = letters, digits, hyphens).
    The JWKS is fetched at start-up and kept 12 h (an unknown key id refetches at once). If it can't be fetched (`AUTH_JWKS_TIMEOUT_MS`, default 15000) requests get `503 auth_unreachable`, not 401, so clients keep their session and retry.
 6. TLS termination and WebSocket pass-through at the load balancer; `trustProxy` is on.
-7. Backups; `pg_stat_statements` on; retention job for `presence` (`sweepPresence`) and `idempotency_keys` (> 7 days) — both are trivial `DELETE`s to schedule.
+7. Backups; `pg_stat_statements` on; retention job for `idempotency_keys` (> 7 days), a trivial `DELETE` to schedule. (`presence` and `bubble_members` are swept every minute by `src/sweeper.ts`, in the worker and in the API when `WORKER_INLINE`.)
 
 Container: `docker build -t campus-service .` — API by default, worker with `node dist/worker.js`.
 
@@ -93,7 +93,7 @@ Container: `docker build -t campus-service .` — API by default, worker with `n
 
 Docker runtime, source root `campus-service/` with the Dockerfile inside it, health check path `/healthz` (`/readyz` also pings the database). Env: `NODE_ENV=production`, `DATABASE_URL` (its own PostGIS database — not the shared app database), `AUTH_JWKS_URL` (above; `AUTH_ISSUER`/`AUTH_AUDIENCE` unset), `SOCIAL_API_URL`, `SOCIAL_INTERNAL_TOKEN`, `MIGRATE_ON_START=1`, `SEED_ZONES_ON_START=1`, `WORKER_INLINE` per the checklist, `CORS_ORIGINS`, `REALTIME_PUBLIC_URL=wss://<host>/v1/realtime`. The platform sets `PORT`.
 
-Start-up runs migrations (each once, advisory-locked), then upserts the 5 hostels and 16 placeholder zones (`geometry_source: "dev_placeholder"`, visible in `/v1/zones` and `/v1/map/features`), then listens.
+Start-up runs migrations (each once, advisory-locked), then upserts the halls and the **23 OpenStreetMap zones** from `src/seed/zones.osm.json` (`geometry_source: "osm"`; the 16 hand-placed `dev_placeholder` zones in `src/seed/zones.ts` are only used, and switched off again, when that file is empty), then listens. `/v1/zones` should therefore return 23 zones, all `osm` (runbook health check).
 
 Use a **session-mode** connection, not a transaction pooler: the realtime fan-out and worker use `LISTEN/NOTIFY`, and the migrator takes a session advisory lock. On Supabase that is the Session pooler on port 5432, not the Transaction pooler on 6543. The CA certificate referenced by `sslrootcert` must exist in the container — on Railway that means a volume mounted at `/etc/secrets` with `prod-ca-2021.crt` uploaded into it.
 

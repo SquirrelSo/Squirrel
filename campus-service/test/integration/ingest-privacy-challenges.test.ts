@@ -19,6 +19,13 @@ function startFakeSocial() {
       if (req.method === 'POST' && req.url === '/internal/v1/people/resolve') {
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ people: [] })); return;
       }
+      // Crew lookups answer "no crews": a 404 here would mark Social down, and block checks then fail closed.
+      if (req.method === 'POST' && req.url === '/internal/v1/crews/memberships') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ people: [] })); return;
+      }
+      if (req.method === 'POST' && req.url === '/internal/v1/crews/lookup') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ crews: [] })); return;
+      }
       if (req.method === 'GET' && req.url?.startsWith('/internal/v1/blocks/')) {
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ blocked: [] })); return;
       }

@@ -26,6 +26,19 @@ def env(monkeypatch):
     get_settings.cache_clear()
 
 
+@pytest.mark.parametrize("raw,expected", [
+    (None, False), ("", False), ("off", False), ("0", False), ("no", False), ("opne", False),
+    ("on", True), ("1", True), ("true", True), (" Yes ", True),
+])
+def test_ambassador_applications_open_only_on_an_explicit_yes(env, raw, expected):
+    env.setenv("JWT_SECRET", "s" * 40)  # any verifier config, so settings load
+    if raw is None:
+        env.delenv("SOCIAL_AMBASSADOR_OPEN", raising=False)
+    else:
+        env.setenv("SOCIAL_AMBASSADOR_OPEN", raw)
+    assert get_settings().ambassador_open is expected
+
+
 def test_plain_postgres_urls_get_the_psycopg_driver(env):
     env.setenv("DATABASE_URL", "postgresql://u:p%40ss@db.example:5432/postgres?sslmode=verify-full&sslrootcert=/etc/secrets/ca.crt")
     assert database_url_from_env() == (

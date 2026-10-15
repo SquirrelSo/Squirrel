@@ -23,6 +23,7 @@ from backend.db import activity_sessions, exercise_sessions
 from backend.db.exercise_sessions import COLUMNS, backfill, build_row, sync_session
 from backend.db.migrate import migrate, migration_files
 from backend.reports import builder
+from backend.tests.db_reset import drop_exercise_tables
 from backend.tests.test_activity_rating import _request as rating_request
 from backend.tests.test_workout_score import UID, _write_session
 from backend.training.router import _set_finished
@@ -40,8 +41,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "USERS_DIR", tmp_path)
     monkeypatch.setenv("DATABASE_URL", TEST_URL)
     with psycopg.connect(TEST_URL, autocommit=True) as conn:
-        conn.execute("DROP TABLE IF EXISTS exercise_sessions, activity_types, user_refresh_tokens, user_accounts, user_profile_data, user_personal_details, user_profiles, auth_throttle, email_verification_codes, "
-                     "partner_hunt_preferences, schema_migrations CASCADE")
+        drop_exercise_tables(conn)
     migrate()
     with psycopg.connect(TEST_URL, autocommit=True) as conn:
         yield conn
@@ -300,8 +300,7 @@ def test_a_database_that_is_down_is_logged_not_raised(tmp_path, monkeypatch, cap
 def test_the_app_migrates_on_startup(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", TEST_URL)
     with psycopg.connect(TEST_URL, autocommit=True) as conn:
-        conn.execute("DROP TABLE IF EXISTS exercise_sessions, activity_types, user_refresh_tokens, user_accounts, user_profile_data, user_personal_details, user_profiles, auth_throttle, email_verification_codes, "
-                     "partner_hunt_preferences, schema_migrations CASCADE")
+        drop_exercise_tables(conn)
     from backend.main import _lifespan, app
 
     async def start_and_stop():

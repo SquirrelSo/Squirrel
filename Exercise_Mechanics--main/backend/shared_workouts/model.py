@@ -3,7 +3,14 @@
 A session is one JSON document (stored as is; see store.py):
 
     {session_id, invite_code, exercise_key, duration_s, created_at, starts_at, ends_at,
-     players: [{user_id, role, person, ready, reps, seq, joined_at, finished_at, left_at, left_reason}]}
+     players: [{user_id, role, person, ready, reps, seq, joined_at, finished_at, left_at, left_reason}],
+     invites: [{user_id, social_profile_id, person, status, invited_at, declined_at}],
+     completed_at, rewards: [user_id…]}
+
+`invites` are the host's invitations to their Partner Hunt connections (status invited | declined).
+`completed_at` is set exactly once, when a race reaches `finished`; `rewards` then lists who earned
+the finishing XP. Documents written before these keys existed have no `completed_at` key at all and
+are never settled (they were hand-tapped races that earned nothing when they ran).
 
 `user_id` is the login `sub` and never leaves this service; `person` is the Social PersonLite
 (profile id, name, avatar, hostel) looked up when the player joined, and is what the app sees.
@@ -34,7 +41,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from backend.shared_workouts.policy import COUNTDOWN_S, EXERCISES, LOBBY_TTL_S, REP_SOURCE, REPS_GRACE_S
+from backend.shared_workouts.policy import (
+    COUNTDOWN_S,
+    EXERCISES,
+    LOBBY_TTL_S,
+    PLAUSIBLE_REPS_PER_S,
+    PLAUSIBLE_REPS_SLACK,
+    REP_SOURCE,
+    REPS_GRACE_S,
+)
 
 LOBBY, EXPIRED, COUNTDOWN, RACING, FINISHED = "lobby", "expired", "countdown", "racing", "finished"
 IN_PLAY = (LOBBY, COUNTDOWN, RACING)
@@ -65,6 +80,9 @@ def new_session(session_id: str, invite_code: str, exercise_key: str, duration_s
         "starts_at": None,
         "ends_at": None,
         "players": [new_player(host_id, "host", host_person, now)],
+        "invites": [],
+        "completed_at": None,
+        "rewards": [],
     }
 
 
@@ -131,6 +149,37 @@ def can_report(session: dict, me: dict, now: datetime) -> bool:
     return me["finished_at"] is None
 
 
+def plausible(session: dict, reps: int, now: datetime) -> bool:
+    """At most PLAUSIBLE_REPS_PER_S reps per second of race time so far, plus the slack."""
+    starts_at = parse(session["starts_at"])
+    if starts_at is None:
+        return True
+    elapsed = (min(now, parse(session["ends_at"])) - starts_at).total_seconds()
+    return reps <= PLAUSIBLE_REPS_PER_S * max(elapsed, 0.0) + PLAUSIBLE_REPS_SLACK
+
+
+def invite_for(session: dict, user_id: str) -> dict | None:
+    return next((i for i in session.get("invites", []) if i["user_id"] == user_id), None)
+
+
+def pending_invites(session: dict) -> list[dict]:
+    """Invitations still waiting: not declined, and the person hasn't taken a seat."""
+    seated_ids = set(member_ids(session))
+    return [i for i in session.get("invites", []) if i["status"] == "invited" and i["user_id"] not in seated_ids]
+
+
+def completion_due(session: dict, now: datetime) -> bool:
+    """A race (it started) that has reached `finished` and was never settled."""
+    return ("completed_at" in session and session["completed_at"] is None and session["starts_at"] is not None
+            and phase(session, now) == FINISHED)
+
+
+def finishers(session: dict) -> list[dict]:
+    """Who earns the finishing XP: did not leave before the end (leaving or disconnecting both set
+    left_at, and neither can happen once the race is over) and reported at least one rep."""
+    return [p for p in session["players"] if p["left_at"] is None and p["reps"] >= 1]
+
+
 # --- changing --------------------------------------------------------------------------------------
 
 def set_ready(session: dict, me: dict, ready: bool, now: datetime) -> None:
@@ -163,11 +212,33 @@ def leave(session: dict, me: dict, now: datetime, reason: str = "left") -> None:
     me["left_at"], me["left_reason"] = iso(now), reason
 
 
-def close_lobby(session: dict, now: datetime) -> None:
-    """End an unstarted lobby for everyone in it at once (a block found when someone readies up).
-    Every player gets the same left_reason, so neither learns who blocked whom."""
+def close_lobby(session: dict, now: datetime, reason: str = "closed") -> None:
+    """End an unstarted lobby for everyone in it at once: a block found when someone readies up
+    ("closed": every player gets the same reason, so neither learns who blocked whom), or the host
+    cancelling ("cancelled")."""
     for p in seated(session):
-        p["left_at"], p["left_reason"], p["ready"] = iso(now), "closed", False
+        p["left_at"], p["left_reason"], p["ready"] = iso(now), reason, False
+
+
+def add_invite(session: dict, user_id: str, profile_id: str, person: dict, now: datetime) -> None:
+    session.setdefault("invites", []).append({
+        "user_id": user_id, "social_profile_id": profile_id, "person": person, "status": "invited",
+        "invited_at": iso(now), "declined_at": None})
+
+
+def decline_invite(invite: dict, now: datetime) -> None:
+    if invite["status"] != "declined":
+        invite["status"], invite["declined_at"] = "declined", iso(now)
+
+
+def mark_completed(session: dict, now: datetime) -> list[str] | None:
+    """Settle a finished race, once: returns who earned the finishing XP, or None if it was not due
+    (not finished yet, never started, or already settled)."""
+    if not completion_due(session, now):
+        return None
+    rewarded = [p["user_id"] for p in finishers(session)]
+    session["completed_at"], session["rewards"] = iso(now), rewarded
+    return rewarded
 
 
 def join(session: dict, user_id: str, person: dict, now: datetime) -> None:
@@ -183,6 +254,9 @@ def view(session: dict, viewer: str | None, now: datetime, *, connected: dict[st
     """The session as the app sees it. Login subjects never appear: people are Social PersonLites."""
     ends_at = parse(session["ends_at"])
     time_up = ends_at is not None and now >= ends_at
+    # Who earned the finish XP, once settled. Also in workout.session.completed, but a client that
+    # polls (or opens the race later, e.g. from the notification) never sees that event.
+    rewards = set(session.get("rewards") or []) if session.get("completed_at") else None
     seats = {"host": None, "partner": None}
     for p in session["players"]:
         finished_at = p["finished_at"]
@@ -198,8 +272,12 @@ def view(session: dict, viewer: str | None, now: datetime, *, connected: dict[st
             "finished_at": finished_at,
             "left_at": p["left_at"],
             "left_reason": p["left_reason"],
+            "rewarded": None if rewards is None else p["user_id"] in rewards,
         }
     me = player(session, viewer) if viewer else None
+    # Invitations are the players' business only: an invite preview (anyone with the code) sees none.
+    invites = [{"user": i["person"], "status": i["status"], "invited_at": i["invited_at"]}
+               for i in session.get("invites", [])] if me and me["left_at"] is None else []
     return {
         "session_id": session["session_id"],
         "invite_code": session["invite_code"],
@@ -215,5 +293,7 @@ def view(session: dict, viewer: str | None, now: datetime, *, connected: dict[st
         "starts_at": session["starts_at"],
         "ends_at": session["ends_at"],
         "rep_source": REP_SOURCE,
+        "invites": invites,
+        "completed_at": session.get("completed_at"),
         "server_time": iso(now),
     }

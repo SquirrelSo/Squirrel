@@ -12,6 +12,7 @@ import { getPeopleLite } from './repo.js';
 import { authConfigured } from '../auth/jwt.js';
 import { isBlockedEitherWay } from '../blocks/service.js';
 import { lookupCrewMemberships, lookupCrews } from '../identity/index.js';
+import { leaveBubble } from '../bubble/service.js';
 
 
 const MePatch = z.object({
@@ -123,6 +124,8 @@ export async function userRoutes(app: FastifyInstance) {
     }
     const until = b.enabled ? new Date(Date.now() + (b.hours ?? 12) * 3_600_000).toISOString() : null;
     const u = (await updateUser(user.id, { open_to_meet: b.enabled, open_to_meet_updated_at: new Date().toISOString(), open_to_meet_until: until }))!;
+    // Open to Meet is the bubble's opt-in: switching it off leaves the bubble at once.
+    if (!b.enabled) await leaveBubble(user.id).catch((err) => req.log.warn({ err }, 'leave bubble failed'));
     return { enabled: u.open_to_meet, updated_at: u.open_to_meet_updated_at, visible_until: u.open_to_meet_until };
   };
   app.put('/v1/me/open-to-meet', { preHandler: requireAuth }, openToMeetHandler);     // app

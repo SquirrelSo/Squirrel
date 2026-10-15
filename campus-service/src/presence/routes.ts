@@ -64,7 +64,8 @@ export async function presenceRoutes(app: FastifyInstance) {
               p.activity_type, p.activity_started_at, p.updated_at, ST_Y(p.geom) AS lat, ST_X(p.geom) AS lng,
               (SELECT ST_Distance(p.geom::geography, me.geom::geography) FROM me) AS distance_m
        FROM presence p JOIN users u ON u.id = p.user_id LEFT JOIN hostels h ON h.id = u.hostel_id
-       WHERE p.expires_at > now() AND u.id <> $1 AND u.open_to_meet AND NOT u.is_banned LIMIT 200`, [user.id], getPool(),
+       WHERE p.expires_at > now() AND u.id <> $1 AND u.open_to_meet AND (u.open_to_meet_until IS NULL OR u.open_to_meet_until > now())
+         AND NOT u.is_banned LIMIT 200`, [user.id], getPool(),
     );
     const { syncBatchXp } = await import('../run/index.js');
     await syncBatchXp(rows, getPool());

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.auth import Viewer, bearer_token, get_or_create_user
 from app.config import Settings
 from app.ratelimit import RateLimiter
-from app.services import push, xp_cache
+from app.services import ambassador, push, xp_cache
 from app.services.media import MediaStorage
 from app.services.membership import ensure_member
 from app.services.run_module import RunModule
@@ -23,6 +23,8 @@ def get_db(request: Request) -> Iterator[Session]:
     # refresh other people's cached XP from the Run Module (services/xp_cache.py).
     db = push.attach(request.app.state.db.SessionLocal(), request.app.state.push)
     xp_cache.attach(db, request.app.state.run_module, request.app.state.settings, read_request=request.method == "GET")
+    # Ambassador XP rewards due in this request go to the Run Module after it commits.
+    ambassador.attach(db, request.app.state.run_module, request.app.state.settings)
     try:
         yield db
     finally:

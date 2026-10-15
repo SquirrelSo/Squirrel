@@ -1,8 +1,9 @@
 import { getPool, one, many, type Queryable } from '../db/pool.js';
 import { lookupBlocks, BlocksUnavailableError } from '../identity/index.js';
 import { ApiError } from '../lib/errors.js';
+import { config } from '../config.js';
 
-/** Fetch the caller's full block set (Social's list plus ONE local query) */
+/** Fetch the caller's full block set: Social's list, plus the legacy local rows while LEGACY_LOCAL_BLOCKS is on. */
 export async function getFullBlockSet(userId: string, q: Queryable = getPool()): Promise<Set<string>> {
   let socialBlocks: Set<string>;
   try {
@@ -13,6 +14,7 @@ export async function getFullBlockSet(userId: string, q: Queryable = getPool()):
     }
     throw err;
   }
+  if (!config.blocks.legacyLocal) return socialBlocks;
   const localBlocks = await many<{ other: string }>(
     `SELECT blocked_id AS other FROM blocks WHERE blocker_id = $1
      UNION
@@ -34,6 +36,7 @@ export async function isBlockedEitherWay(a: string, b: string, q: Queryable = ge
     }
     throw err;
   }
+  if (!config.blocks.legacyLocal) return false;
 
   const r = await one<{ blocked: boolean }>(
     `SELECT EXISTS (

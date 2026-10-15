@@ -24,6 +24,7 @@ from app.config import Settings
 from app.db import utcnow
 from app.errors import ApiError, conflict, invalid, not_found
 from app.models import Badge, Member, User
+from app.services import ambassador
 from app.services import notify as notifications
 from app.services.social import award_badge, bump
 
@@ -79,6 +80,9 @@ def _assign_rank(db: Session, member: Member, settings: Settings) -> None:
                 db.rollback()
                 db.refresh(member)
                 return
+            # Joined with a friend's code before verifying: it counts for the friend now (once).
+            _count_referral(db, member.user_id, settings)
+            ambassador.check_referral(db, member.user_id)
             badge = founding_badge_for(rank, settings)
             if badge:
                 award_badge(db, member.user_id, badge)
@@ -137,16 +141,31 @@ def claim_referral(db: Session, member: Member, code: str, settings: Settings, *
     if claimed is None:
         db.rollback()
         raise conflict("You've already used an invite code.", "referral_used")
-    if member.email_verified:
-        bump(db, Member, Member.user_id == referrer.user_id, referrals_count=1)
-        count = db.scalar(select(Member.referrals_count).where(Member.user_id == referrer.user_id))
-        name = actor.display_name
-        notifications.notify(db, referrer.user_id, "referral", f"{name} joined with your invite",
-                             _referral_progress(count, settings), data={"route": "/invite"},
-                             actor_id=actor.id, dedupe_key=f"referral:{member.user_id}")
+    db.refresh(member)
+    _count_referral(db, member.user_id, settings)  # now if verified, else when they verify
+    ambassador.check_referral(db, member.user_id)
     db.commit()
     db.refresh(member)
     return member
+
+
+def _count_referral(db: Session, member_id, settings: Settings) -> None:
+    """Counts a verified member's referral for the referrer, exactly once (members.referral_counted
+    decides it: concurrent claim + verification can't both count it), and tells the referrer."""
+    referrer_id = db.execute(
+        update(Member).where(Member.user_id == member_id, Member.referred_by_id.is_not(None),
+                             Member.email_verified.is_(True), Member.referral_counted.is_(False))
+        .values(referral_counted=True).returning(Member.referred_by_id)
+    ).scalar()
+    if referrer_id is None:
+        return
+    bump(db, Member, Member.user_id == referrer_id, referrals_count=1)
+    count = db.scalar(select(Member.referrals_count).where(Member.user_id == referrer_id))
+    friend = db.get(User, member_id)
+    name = friend.display_name if friend else "A friend"
+    notifications.notify(db, referrer_id, "referral", f"{name} joined with your invite",
+                         _referral_progress(count, settings), data={"route": "/invite"},
+                         actor_id=member_id, dedupe_key=f"referral:{member_id}")
 
 
 def _referral_progress(count: int, settings: Settings) -> str:

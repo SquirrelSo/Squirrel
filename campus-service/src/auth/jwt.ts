@@ -88,5 +88,7 @@ export async function verifyBearer(token: string): Promise<Principal> {
 
 function toPrincipal(payload: JWTPayload): Principal {
   if (typeof payload.sub !== 'string' || !payload.sub) throw new Error('token has no sub');
+  // Exercise's service tokens (typ "service", sub "exercise_module") are never a user.
+  if (payload.typ !== undefined && payload.typ !== 'access') throw new Error('not an access token');
   return { userId: payload.sub, claims: payload };
 }

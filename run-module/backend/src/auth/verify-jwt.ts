@@ -176,6 +176,14 @@ export async function requireAuth(
       return;
     }
 
+    // Exercise marks user tokens typ "access" and service tokens typ "service" (ADR-027 §5).
+    // A typed token that is not an access token is never a user, whatever its sub.
+    if (payload["typ"] !== undefined && payload["typ"] !== "access") {
+      request.log.info({ reason: "not_an_access_token" }, "auth rejected");
+      await sendUnauthorized(reply);
+      return;
+    }
+
     sub = payload.sub;
   } catch (err: unknown) {
     // Log the specific reason server-side; never expose it to the client.

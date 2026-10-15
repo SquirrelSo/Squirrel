@@ -66,7 +66,9 @@ pass `requireAuth` (its sub is not a UUID). No new secret to manage; moving to R
 keeps working, since the issuer holds the signing key either way.
 
 ## Not built (not defined yet)
-Streaks, personal bests, challenges, the daily-goal and rest-day bonuses. Streaks need a day
+Streaks, personal bests, challenges, the daily-goal and rest-day bonuses. (Since defined: challenges
+(ADR-032 "Goals") and the daily goal, awards from other services, reversal and the challenge reward
+cap: ADR-033.) Streaks need a day
 boundary decided (§3 is a candidate); personal bests span both modules.
 
 ## Consequences

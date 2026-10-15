@@ -17,7 +17,7 @@ import {
 } from "../../geometry/__fixtures__/shape-tracks.js";
 import { createLocalProjection } from "../../geometry/projection.js";
 import type { LatLng } from "../../geometry/types.js";
-import { computeXp, DEFAULT_XP_TIMEZONE, runLines, xpDay, type ActivityRow } from "../../xp/rules.js";
+import { computeXp, DAILY_GOAL_XP, DEFAULT_XP_TIMEZONE, runLines, xpDay, type ActivityRow } from "../../xp/rules.js";
 
 // We hoist the mock of pipeline.js so we can intercept processTrack in A2
 vi.mock("../../geometry/pipeline.js", async (importOriginal) => {
@@ -421,7 +421,7 @@ testRunIds.push(runId2);
       id: crypto.randomUUID(),
       created_at: new Date(activity.rows[0]!.created_at.getTime() + 1000),
     };
-    expect(computeXp([activity.rows[0]!, secondRunSameDay]).xp).toBeLessThanOrEqual(150);
+    expect(computeXp([activity.rows[0]!, secondRunSameDay]).xp).toBeLessThanOrEqual(150 + DAILY_GOAL_XP); // run cap + the day's goal
   });
 
   it("carries the run's time zone into its activity row, so XP days are the runner's own", async () => {

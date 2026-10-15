@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { Challenge, ChallengeType, Comparator, ChallengeState, ChallengeParticipant, ParticipantStatus } from './types.js';
 import { Metric } from './metrics.js';
 import { computeProgress } from './progress.js';
+import { MAX_CHALLENGE_XP_REWARD } from '../xp/awards.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sqlFile = await fs.readFile(
@@ -43,6 +44,9 @@ export async function createChallenge(
 ): Promise<Challenge> {
   if (endsAt <= startsAt) {
     throw new Error('ends_at must be after starts_at');
+  }
+  if (!Number.isInteger(xpReward) || xpReward < 0 || xpReward > MAX_CHALLENGE_XP_REWARD) {
+    throw new Error(`xp_reward must be an integer from 0 to ${MAX_CHALLENGE_XP_REWARD}`);
   }
 
   const challengeId = crypto.randomUUID();

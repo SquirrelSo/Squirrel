@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { boardBlocker, labelOf, labelsOf, preferencesBody, preferencesDraft, preferencesProblems, requestOutcome, statusBlocker, toggleKey } from './partnerHunt.ts';
+import { boardBlocker, labelOf, removeBuddyNote, removeBuddyOutcome, labelsOf, preferencesBody, preferencesDraft, preferencesProblems, requestOutcome, statusBlocker, toggleKey } from './partnerHunt.ts';
 
 const options = {
   activities: [{ key: 'running', label: 'Running' }, { key: 'yoga', label: 'Yoga' }],
@@ -55,4 +55,11 @@ test('preferences: a sensible draft, the server’s rules checked first, keys se
   assert.equal(preferencesBody(prefs({ city: '  Kalyani ' })).city, 'Kalyani');
   assert.deepEqual(toggleKey(['a'], 'b'), ['a', 'b']);
   assert.deepEqual(toggleKey(['a', 'b'], 'a'), ['b']);
+});
+
+test('removing a buddy: the confirm says silent and 30 days; already gone reads as gone, anything else as itself', () => {
+  assert.match(removeBuddyNote('Riya'), /Riya won’t be told/);
+  assert.match(removeBuddyNote('Riya'), /30 days/);
+  assert.deepEqual(removeBuddyOutcome('connection_not_found', 'x'), { message: 'That connection isn’t there any more.', gone: true });
+  assert.deepEqual(removeBuddyOutcome(null, 'You’re offline.'), { message: 'You’re offline.', gone: false });
 });

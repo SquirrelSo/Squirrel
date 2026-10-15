@@ -69,6 +69,20 @@ export function requestOutcome(code: string | null, detail: Record<string, unkno
   }
 }
 
+/** Removing a buddy (DELETE …/connections/{id}): silent both ways, then the request cooldown runs. */
+export const BUDDY_COOLDOWN_DAYS = 30;
+export const removeBuddyNote = (name: string) =>
+  `${name} won’t be told: you just disappear from each other’s connections. Neither of you can send a new request for ${BUDDY_COOLDOWN_DAYS} days.`;
+
+/** What a remove came to. `gone`: it's no longer a connection either way (removed now, or already). */
+export function removeBuddyOutcome(code: string | null, message: string): { message: string; gone: boolean } {
+  if (code === 'connection_not_found') return { message: 'That connection isn’t there any more.', gone: true };
+  return { message, gone: false };
+}
+
+/** Accepting connects you; the server awards each of you buddy_connected once per pair (never again on reconnecting). */
+export const BUDDY_CONNECTED_XP = 20;
+
 /** A starting point for the form: what's saved, else sensible defaults within the server's ranges. */
 export function preferencesDraft(s: PartnerStatus): PartnerPreferences {
   if (s.preferences) return { ...s.preferences, city: s.preferences.city ?? '' };

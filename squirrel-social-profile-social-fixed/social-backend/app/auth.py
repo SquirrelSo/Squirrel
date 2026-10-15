@@ -38,7 +38,7 @@ class TokenVerifier:
     def verify(self, token: str) -> dict:
         try:
             key = self._jwks.get_signing_key_from_jwt(token).key if self._jwks else self._key
-            return jwt.decode(
+            claims = jwt.decode(
                 token,
                 key,
                 algorithms=self.algorithms,
@@ -51,6 +51,10 @@ class TokenVerifier:
             raise unauthorized("Your session expired. Sign in again.") from None
         except (jwt.PyJWTError, ValueError):
             raise unauthorized("Invalid token.") from None
+        # Exercise's service tokens (typ "service", sub "exercise_module") are never a person.
+        if claims.get("typ", "access") != "access":
+            raise unauthorized("Invalid token.")
+        return claims
 
 
 @dataclass

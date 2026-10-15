@@ -14,15 +14,22 @@
 
 /** Campus endpoints with no backend yet (the seven), plus the shared-workout service. */
 export type Capability =
-  | 'sharedZones' // GET /v1/me/shared-zones
-  | 'heatmap' // GET /v1/map/heatmap
+  | 'sharedZones' // GET /v1/me/shared-zones (served by campus-service; opted in when it is configured)
+  | 'heatmap' // GET /v1/map/heatmap?window=7d|30d (served by campus-service; opted in when it is configured)
   | 'dateSuggestions' // GET /v1/dates/suggestions, POST …/{id}/dismiss, GET|PUT /v1/dates/settings (built: Social)
   | 'media' // Social: POST /v1/media/uploads, PUT {upload_url}, POST /v1/media/{id}/complete (posts, avatars)
-  | 'meetupRating' // GET /v1/meetups/{id}/rating, POST /v1/meetups/{id}/ratings
-  | 'meetupCheckIn' // POST /v1/meetups/{id}/check-in on campus-service (it serves meetups, not check-in yet)
+  | 'meetupRating' // GET /v1/meetups/{id}/rating, POST /v1/meetups/{id}/ratings (served by campus-service; opted in there)
+  | 'meetupCheckIn' // POST /v1/meetups/{id}/check-in on campus-service (served; opted in when campus-service is configured, api/campus/index.ts)
   | 'ambassador' // GET | POST /v1/ambassador/application (built: Social)
-  | 'profileDetails' // PATCH /v1/me with `profile_details`
-  | 'sharedWorkout'; // Exercise: /api/workout-sessions/* + /ws/workout-sessions/{id} (built, deployed)
+  | 'profileDetails' // PATCH /v1/me with `profile_details`: retired (ADR-032). About-you saves to Exercise (api/profileDetails.ts), ungated
+  | 'sharedWorkout' // Exercise: /api/workout-sessions/* + /ws/workout-sessions/{id} (built, deployed)
+  | 'xpStats' // Run Module: GET /v1/xp/stats, /v1/xp/history, /v1/leaderboard/xp (ADR-033)
+  | 'discover' // campus-service: GET /v1/discover[/nearby|active|challenges|crews|zones]
+  | 'bubble' // campus-service: /v1/bubble (join, leave, state, nearby) + bubble.* realtime
+  | 'notificationPrefs' // Social: GET|PATCH /v1/notifications/preferences, POST /v1/notifications/{id}/read, /read-all
+  | 'ambassadorProgramme' // Social: /v1/ambassador/{me,referrals,tasks,leaderboard}
+  | 'sharedWorkoutInvites' // Exercise: POST /api/workout-sessions/{id}/invite, /{id}/cancel, /invites/{code}/decline
+  | 'buddyRemove'; // Exercise: DELETE /api/users/{me}/partner-hunt/connections/{id}
 
 export const CAPABILITY_LABEL: Record<Capability, string> = {
   sharedZones: 'Shared zones',
@@ -34,6 +41,13 @@ export const CAPABILITY_LABEL: Record<Capability, string> = {
   ambassador: 'Ambassador applications',
   profileDetails: 'Saving profile details',
   sharedWorkout: 'Shared workouts',
+  xpStats: 'XP history',
+  discover: 'Discover',
+  bubble: 'Your bubble',
+  notificationPrefs: 'Notification settings',
+  ambassadorProgramme: 'The ambassador programme',
+  sharedWorkoutInvites: 'Workout invites',
+  buddyRemove: 'Removing a buddy',
 };
 
 /** Backend status in code. Built: Squirrel Dates, photo uploads and ambassador applications (Social); shared workouts (Exercise). */
@@ -47,10 +61,20 @@ const BUILT: Record<Capability, boolean> = {
   ambassador: true,
   profileDetails: false,
   sharedWorkout: true,
+  // Built in the backend-features release (one per service). On, so they work the moment each
+  // service is deployed; until then the server's 404 no_route reads as "not live yet"
+  // (featureUnavailable), never as an error.
+  xpStats: true,
+  discover: true,
+  bubble: true,
+  notificationPrefs: true,
+  ambassadorProgramme: true,
+  sharedWorkoutInvites: true,
+  buddyRemove: true,
 };
 
 /** Labels that read as one thing ("… isn’t live yet"); the rest are plural ("… aren’t live yet"). */
-const SINGULAR = new Set<Capability>(['profileDetails', 'meetupCheckIn']);
+const SINGULAR = new Set<Capability>(['profileDetails', 'meetupCheckIn', 'discover', 'bubble', 'ambassadorProgramme', 'buddyRemove']);
 const notLiveText = (c: Capability) => `${CAPABILITY_LABEL[c]} ${SINGULAR.has(c) ? 'isn’t' : 'aren’t'} live yet`;
 
 export function parseLiveEndpoints(raw: string | undefined): Set<Capability> {

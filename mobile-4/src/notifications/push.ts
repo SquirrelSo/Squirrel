@@ -15,6 +15,7 @@ import * as Notifications from 'expo-notifications';
 import { router, type Href } from 'expo-router';
 import { notificationsApi } from '@/api/community';
 import { SOCIAL_API_CONFIGURED } from '@/api/config';
+import { kindRoute } from '@/logic/notificationPrefs';
 import { appRoute } from '@/notifications/routes';
 import { AlarmService } from '@/features/alarm/AlarmService';
 
@@ -66,7 +67,10 @@ function openRoute(data: unknown) {
   // challenge that's already on screen.
   const alarmId = AlarmService.alarmIdOf(data);
   if (alarmId) return AlarmService.fire(alarmId);
-  const route = appRoute((data as { route?: unknown } | null)?.route);
+  // The newer kinds open a fixed screen (their server route can point where the app has none).
+  const d = data as Record<string, unknown> | null;
+  const fixed = typeof d?.kind === 'string' ? kindRoute(d.kind, d) : undefined;
+  const route = fixed === undefined ? appRoute(d?.route) : fixed && appRoute(fixed);
   if (route) router.push(route as Href);
 }
 

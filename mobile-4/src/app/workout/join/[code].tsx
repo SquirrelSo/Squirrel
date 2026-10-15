@@ -1,6 +1,8 @@
 /**
  * JOIN A SHARED WORKOUT — where an invite link lands (squirrelsocial://workout/join/{code}, or
- * /w/{code} on the web). Shows who invited you and the exercise, then Join → the session.
+ * /w/{code} on the web). Shows who invited you and the exercise, then Join → the session, or
+ * Decline (POST …/invites/{code}/decline, 204): the host isn't notified, but their lobby shows it.
+ * Someone who opened a shared link without being invited has nothing to decline (404): they just leave.
  */
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
@@ -8,7 +10,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { errorKind, errorText, featureUnavailable } from '@/api/campus';
 import { useAuth } from '@/auth/AuthProvider';
 import { existingSessionId, sharedWorkoutApi, sharedWorkoutErrorCode } from '@/api/sharedWorkout';
-import { LoadingRows } from '@/components/campus/States';
+import { LoadingRows, NotLiveYet } from '@/components/campus/States';
 import { ExerciseHeader, Participants, seatOf, SharedEnded, SharedTag, type EndedKind } from '@/components/workout/SharedWorkout';
 import { Button, Display, Header, Screen, tap } from '@/components/ui';
 import { EXERCISE_LIBRARY } from '@/data/exercises';
@@ -26,8 +28,11 @@ export default function JoinSharedWorkout() {
   const [s, setS] = useState<SharedWorkoutSession | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [joining, setJoining] = useState(false);
+  const [declining, setDeclining] = useState(false);
+  const [declineNotLive, setDeclineNotLive] = useState(false);
   const [refused, setRefused] = useState<EndedKind | null>(null);
   const home = () => router.replace('/home');
+  const leave = () => (router.canGoBack() ? router.back() : home());
 
   // Wait for the saved token: an invite link often cold-starts the app.
   useEffect(() => {
@@ -67,6 +72,22 @@ export default function JoinSharedWorkout() {
     }
   };
 
+  const decline = async () => {
+    tap();
+    setDeclining(true);
+    try {
+      await sharedWorkoutApi.declineInvite(code);
+      toast('Declined. They won’t get a notification.', 'close-circle-outline', colors.dim);
+      leave();
+    } catch (e) {
+      setDeclining(false);
+      if (featureUnavailable(e)) return setDeclineNotLive(true);
+      // 404: you weren't invited (a shared link), so there's nothing to say no to. Just go.
+      if (errorKind(e) === 'not_found') return leave();
+      toast(errorText(e), 'alert-circle-outline', colors.coral);
+    }
+  };
+
   const ex = s ? EXERCISE_LIBRARY.find((e) => e.key === s.exercise.key) : undefined;
   const host = s?.host.user.display_name.split(' ')[0] ?? 'Someone';
   // The preview's phase, ticked at expires_at (a link opened just as it runs out).
@@ -95,7 +116,12 @@ export default function JoinSharedWorkout() {
           <Display size={36}>{host} wants to{'\n'}work out with you</Display>
           <ExerciseHeader name={s.exercise.name} icon={ex?.icon} blurb={ex?.blurb} plan={`${durationLabel(s.duration_s)} race · most reps wins`} />
           <Participants you={{ ...seatOf(null, 'You'), person: me.data ?? null }} partner={{ ...seatOf(s.host, 'Host') }} />
-          <Button label={joining ? 'Joining…' : 'Join workout'} icon="arrow-right" disabled={joining} onPress={join} />
+          <Button label={joining ? 'Joining…' : 'Join workout'} icon="arrow-right" disabled={joining || declining} onPress={join} />
+          {declineNotLive ? (
+            <NotLiveYet compact name="Declining an invite" body="Saying no switches on when its backend is ready. You can simply ignore the invite: it runs out after 10 minutes." />
+          ) : (
+            <Button label={declining ? 'Declining…' : 'Decline'} variant="secondary" size="md" disabled={joining || declining} onPress={decline} />
+          )}
         </View>
       )}
     </Screen>

@@ -3,11 +3,12 @@ import { z } from 'zod';
 import { getPool, many, one, query, withTransaction } from '../db/pool.js';
 import type { Queryable } from '../db/pool.js';
 import { currentUser, requireAuth } from '../auth/plugin.js';
-import { errors } from '../lib/errors.js';
+import { ApiError, errors } from '../lib/errors.js';
 import { isUuid } from '../lib/ids.js';
 import { campusNotificationDedupeKey, notify } from '../notifications/service.js';
 import { isBlockedEitherWay, getFullBlockSet } from '../blocks/service.js';
-import { getPeopleLite, createMissingUsersFromSocial } from '../users/repo.js';
+import { getPeopleLite, createMissingUsersFromSocial, invalidateUserCache } from '../users/repo.js';
+import { awardXpAfterCommit, MEETUP_CHECKIN_XP } from '../run/index.js';
 
 type MeetupStatus = 'proposed' | 'confirmed' | 'cancelled' | 'completed';
 type MeetupRow = {
@@ -137,7 +138,8 @@ export async function meetupRoutes(app: FastifyInstance) {
       if (users.length !== body.invitee_ids.length) {
         const stillMissingIds = body.invitee_ids.filter(id => !users.some(u => u.id === id));
         const missingLabels = stillMissingIds.map(id => socialNames.get(id) ?? `User ${id.slice(0, 6)}`);
-        throw errors.notFound(`${missingLabels.join(', ')} hasn't used the campus map yet`);
+        // Not errors.notFound(): that appends " not found" to the text, which is a full sentence here.
+        throw new ApiError(404, 'not_found', `${missingLabels.join(', ')} hasn't used the campus map yet`);
       }
     }
 
@@ -266,7 +268,8 @@ export async function meetupRoutes(app: FastifyInstance) {
       return replay.response;
     }
   
-    return await withTransaction(async (tx) => {
+    let xpAwardees: string[] = [];
+    const out = await withTransaction(async (tx) => {
       const row = await loadMeetup(id, tx, true);
       if (!row) throw errors.notFound('Meetup');
       
@@ -275,6 +278,7 @@ export async function meetupRoutes(app: FastifyInstance) {
   
       const me = parts.find((p) => p.user_id === viewer.id);
       if (!me) throw errors.notFound('Meetup');
+      if (row.status === 'cancelled') throw errors.conflict('meetup_closed', 'This meetup was cancelled.');
       if (me.status === 'declined') throw errors.conflict('meetup_not_participant', 'Only attendees can check in.');
   
       const startMs = Date.parse(row.starts_at);
@@ -283,7 +287,11 @@ export async function meetupRoutes(app: FastifyInstance) {
       }
       
       if (me.status === 'invited') {
+        // Checking in is an implicit accept, so it confirms a proposed meetup exactly as /accept does.
+        // Without this a meetup whose guests only checked in stayed `proposed`, never became
+        // `completed`, and could never be rated.
         await query(`UPDATE meetup_participants SET status = 'accepted', responded_at = now(), checked_in_at = now() WHERE meetup_id = $1 AND user_id = $2`, [id, viewer.id], tx);
+        await query(`UPDATE meetups SET status = 'confirmed', updated_at = now() WHERE id = $1 AND status = 'proposed'`, [id], tx);
       } else {
         await query(`UPDATE meetup_participants SET checked_in_at = now() WHERE meetup_id = $1 AND user_id = $2`, [id, viewer.id], tx);
       }
@@ -295,6 +303,14 @@ export async function meetupRoutes(app: FastifyInstance) {
       };
   
       await query(`INSERT INTO idempotency_keys (user_id, key, scope, status_code, response) VALUES ($1, $2, $3, 200, $4) ON CONFLICT DO NOTHING`, [viewer.id, id, scope, res], tx);
+
+      // meetup_checkin XP: once at least two participants have checked in. The meetup row is locked, so
+      // check-ins are serialised: the second check-in awards both, every later one awards only itself.
+      if (!me.checked_in_at) {
+        const checkedIn = (await participants(id, tx)).filter((p) => p.checked_in_at && p.status !== 'declined').map((p) => p.user_id);
+        if (checkedIn.length === 2) xpAwardees = checkedIn;
+        else if (checkedIn.length > 2) xpAwardees = [viewer.id];
+      }
       
       for (const p of parts) {
         if (p.user_id !== viewer.id && (p.status === 'accepted' || (me.status === 'invited' && p.user_id === viewer.id /* self updated */))) {
@@ -307,6 +323,12 @@ export async function meetupRoutes(app: FastifyInstance) {
       
       return res;
     });
+    // After commit, fire-and-forget (contract §1): the check-in never waits on or fails with the Run Module.
+    for (const subject of xpAwardees) {
+      void awardXpAfterCommit(subject, MEETUP_CHECKIN_XP, 'meetup_checkin', `meetup:${id}:${subject}`, { source_id: id })
+        .then(() => invalidateUserCache(subject));
+    }
+    return out;
   });
 
   app.get('/v1/meetups/:id/rating', { preHandler: requireAuth }, async (req) => {

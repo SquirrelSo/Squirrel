@@ -43,6 +43,28 @@ describe("socialNotificationPayload", () => {
   });
 });
 
+describe("xp.level_up (ADR-033)", () => {
+  it("carries a title, the level and XP, the progress route and the level dedupe key", () => {
+    const user = "22222222-2222-4222-8222-222222222222";
+    const event: NotificationEvent = {
+      id: "44444444-4444-4444-8444-444444444444",
+      user_id: user,
+      type: "xp.level_up",
+      source_module: "run_module",
+      occurred_at: "2026-10-07T06:00:00.000Z",
+      payload: { level: 3, xp: 4010, dedupe_key: `level:${user}:3` },
+    };
+    expect(socialNotificationPayload(event)).toEqual({
+      user_subject: user,
+      kind: "xp.level_up",
+      title: "You reached level 3!",
+      body: "4010 XP so far. Keep it up.",
+      data: { level: 3, xp: 4010, route: "/progress" },
+      dedupe_key: `level:${user}:3`,
+    });
+  });
+});
+
 describe("deliverNotification", () => {
   it("posts to the Social service with the service token", async () => {
     const calls: { url: string; init: RequestInit }[] = [];

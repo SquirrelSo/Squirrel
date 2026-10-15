@@ -90,6 +90,17 @@ def open_for(user_id: str, now: datetime) -> list[dict]:
                 if user_id in r["member_ids"] and model.parse(r["closes_at"]) > now]
 
 
+def due_for_completion(now: datetime, limit: int) -> list[dict]:
+    """Races (started) whose last moment for rep reports has passed and that were never settled, so
+    the background sweep can settle races nobody is looking at any more. The caller re-checks."""
+    if connection.enabled():
+        return [doc for doc in db_sessions.due_for_completion(now, limit) if isinstance(doc, dict)]
+    with _lock:
+        docs = [r["doc"] for r in _all_files() if model.parse(r["closes_at"]) <= now]
+    return [d for d in docs if "completed_at" in d and d["completed_at"] is None
+            and d.get("starts_at") is not None][:limit]
+
+
 def prune(now: datetime) -> int:
     """Delete sessions that closed more than KEEP_CLOSED_S ago (they carry names and photos)."""
     cutoff = now - timedelta(seconds=KEEP_CLOSED_S)

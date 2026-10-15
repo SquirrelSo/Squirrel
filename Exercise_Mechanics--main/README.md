@@ -205,7 +205,7 @@ optional and switch features on:
 
 | Variable | Used by | Without it |
 |---|---|---|
-| `RUN_MODULE_URL` | Partner Hunt's XP gate: the Run Module's `/v1/users/{id}/xp-gate`, called with a short-lived service token signed with `JWT_SECRET` (`RUN_MODULE_TOKEN` overrides it with a fixed token) | Partner Hunt reports the XP service as unavailable |
+| `RUN_MODULE_URL` | Partner Hunt's XP gate: the Run Module's `/v1/users/{id}/xp-gate`, called with a short-lived service token signed with `JWT_SECRET` (`RUN_MODULE_TOKEN` overrides it with a fixed token). Also where XP awards go (`POST /internal/v1/xp/award`, same token): a finished shared workout and a new Partner Hunt connection | Partner Hunt reports the XP service as unavailable; no XP is awarded (logged at debug) |
 | `PARTNER_HUNT_DEV_XP` | Local testing only, when `RUN_MODULE_URL` is unset: a fixed XP for every user | — |
 | `SOCIAL_API_URL`, `SOCIAL_INTERNAL_TOKEN` | The Social service and its service token. Finished workouts are published to it (`backend/social_publish.py`). **Blocks are Social's** ([ADR-032](../docs/decisions/ADR-032-service-ownership.md)): Partner Hunt and activity matching read each viewer's either-way block set from `GET /internal/v1/blocks/{id}` (cached at most 30 s), and their Block buttons create a Social block through `POST /internal/v1/blocks/import` (`backend/social_blocks.py`). Shared workouts and Partner Hunt Connect show people by their Social profile (`POST /internal/v1/people/resolve`, `backend/social_people.py`), and Connect sends `partner.request` / `partner.accepted` through `POST /internal/v1/notifications` (`backend/social_notify.py`, in the background). Checks fail closed: with Social unreachable (a 404 included), the board is withheld and a block refused, `503 blocks_unreachable` | Workouts are not published; Partner Hunt and activity-matching boards and blocks answer `503 blocks_unreachable` (logged) |
 | `MODERATION_TOKEN` | Moderator routes for reports | Moderator routes refuse every request (503) |
@@ -400,15 +400,22 @@ XP, all from `backend/partners/policy.py`, so the app keeps no copy of them.
   (the card name is in the title; opens `/partner-hunt`), and `partner.accepted` to the sender,
   naming the accepter (opens `/partner-hunt/connect/{request_id}`, the screen that loads the
   requests and finds that connection).
+- **Buddies.** An accepted connection is a *buddy*: the people you can invite to a shared workout
+  (below). Either person can remove one with `DELETE /api/users/{id}/partner-hunt/connections/{request_id}`
+  (204). It's silent: no notification (`partner.disconnected` is never sent), and the connection
+  simply disappears from both lists. Removing twice is fine; anyone else, or a request that isn't an
+  accepted connection, gets `404 connection_not_found`. The row is kept as `removed` (with
+  `removed_at`, `removed_by`; migration 009), and the pair's 30-day cooldown runs from the removal:
+  either asking again before then gets `429 too_soon` with `retry_after`.
+- **XP.** When a request is accepted, each person earns `buddy_connected` (20 XP) from the Run
+  Module, once per pair per person: the idempotency key is `buddy:{min(a,b)}:{max(a,b)}:{subject}`,
+  so connecting again after a removal earns nothing more. Sent after the accept is saved,
+  fire-and-forget (`backend/xp_awards.py`); a failure is logged and never fails the accept.
 
-Routes, under `/api/users/{id}/partner-hunt/requests`: `GET` (`{ incoming, outgoing, connections }`),
-`POST` (`{ card_id }`), `POST /{request_id}/accept`, `POST /{request_id}/decline` (204),
-`DELETE /{request_id}` (204, the sender takes it back).
-
-**Not built yet: disconnecting.** Once connected, the only way apart today is a block, which is a
-heavier statement than "not for me after all". Planned: a plain disconnect that either person can
-use, ending the connection for both, silently (no notification, and it reads the same to the other
-side as any connection that has gone).
+Routes, under `/api/users/{id}/partner-hunt`: `GET /requests` (`{ incoming, outgoing, connections }`;
+removed connections are gone), `POST /requests` (`{ card_id }`), `POST /requests/{request_id}/accept`,
+`POST /requests/{request_id}/decline` (204), `DELETE /requests/{request_id}` (204, the sender takes it
+back), `DELETE /connections/{request_id}` (204, either side removes a buddy).
 
 ## Activity matching
 
@@ -446,9 +453,34 @@ countdown starts them together. Exercise owns this feature ([ADR-032](../docs/de
   the host and can invite someone else; the lobby closes only when everyone has left. From the
   countdown on, leaving (or 30 seconds with no socket and no request) ends only your own race.
 - **Reps** are hand-tapped: `{ reps, seq }`, a running total and a counter, and the highest `seq`
-  wins, so retries and undo are safe. Reports count until 5 seconds after `ends_at`.
-- **No XP.** Nothing is written to `activity_sessions` or Social for a shared race; the result is
-  shown and that is all, until reps are camera-counted.
+  wins, so retries and undo are safe. Reports count until 5 seconds after `ends_at`. The server
+  refuses a total above 4 reps per second of race time so far, plus 5 (`422 implausible_reps`, on
+  `reps` and `complete`), and more than 5 reports a second from one person (`429 rate_limited`,
+  with `retry_after_ms`; `complete` isn't throttled).
+- **Inviting a buddy.** The host can invite one of their Partner Hunt connections from the lobby:
+  `POST /{id}/invite { social_profile_id }`. Anyone else is `403 not_a_buddy`, and so is a buddy
+  blocked either way (a block is never revealed); blocks fail closed (`503 blocks_unreachable`),
+  names too (`503 social_unreachable`). Only the host (`403 not_host`), only in the lobby
+  (`409 not_in_lobby`), not with both seats taken (`409 session_full`), and at most 3 invitations
+  waiting at once (`429 too_many_invites`). Inviting the same person again changes nothing. The
+  invitee gets the Social notification `shared_workout.invited` (data `{ code, session_id }`, route
+  `/workout/join/{code}`) and joins with the code as anyone would. An invitee can say no with
+  `POST /invites/{code}/decline` (204; `404` if you weren't invited): silent, but the players'
+  session view lists every invitation (`invites: [{ user, status: invited | declined, invited_at }]`;
+  an invite preview shows none).
+- **Cancelling.** The host can close an unstarted lobby for everyone: `POST /{id}/cancel`
+  (`left_reason: "cancelled"` for every seat; `403 not_host`, `409 already_started` from the
+  countdown on, `409 not_in_lobby` once it expired). Cancelling twice is fine.
+- **XP for finishing, not for reps.** When a race reaches `finished` it is settled exactly once
+  (`completed_at` in the session; the first write or read after the end does it, and a background
+  sweep every 30 seconds settles races nobody looks at any more, e.g. both apps closed). Each player
+  who didn't leave before the end (leaving or 30 s disconnected both count as leaving) and reported
+  at least one rep earns `shared_workout_finished`: a flat 20 XP from the Run Module, never per rep,
+  at most 3 a day (the Run Module's cap), idempotency key `shared:{session_id}:{subject}`. Both
+  players get the Social notification `shared_workout.finished` (data `{ session_id }`, route
+  `/workout/{session_id}`). Taps in the 5-second grace still change the result shown, not who earned
+  XP. Duplicate `complete` calls, replays and later reads never award again. Nothing is written to
+  `activity_sessions`.
 - **Who sees what.** A session is visible only to the two people in it (404 for anyone else). An
   invite is visible to anyone signed in with the code unless either has blocked the other: the same
   404 as an unknown code, and `503 blocks_unreachable` when Social's blocks can't be checked. Blocks
@@ -457,15 +489,19 @@ countdown starts them together. Exercise owns this feature ([ADR-032](../docs/de
   are shown by their Social profile (`POST /internal/v1/people/resolve`, looked up on create and
   join and kept with the session); login ids never leave Exercise.
 - **Live updates:** `WS /ws/workout-sessions/{id}?token=<access token>` sends
-  `workout.session.updated` and `workout.reps.updated`, and answers `{"type":"ping"}` with `pong`.
+  `workout.session.updated` and `workout.reps.updated`; `workout.session.invited`
+  (`{ session_id, invite }`), `workout.session.cancelled` (`{ session_id, at }`, before the last update
+  and the close) and `workout.session.completed` (`{ session_id, completed_at, results: [{ user, reps,
+  finished, rewarded }] }`, once); and answers `{"type":"ping"}` with `pong`.
   The app polls `GET` every 2 seconds when there's no socket. Sockets and presence are in-process
   (one worker, as for `/ws/train`).
 - **Storage:** `shared_workout_sessions` (migration 007) with `DATABASE_URL`, otherwise
   `data/shared_workouts/<id>.json`. Sessions are deleted a week after they close.
 
 Routes, under `/api/workout-sessions`: `POST` (create `{ exercise_key, duration_s }`), `GET /{id}`,
-`GET /invites/{code}` (preview), `POST /invites/{code}/join`, `PUT /{id}/ready` (`{ ready }`),
-`POST /{id}/reps` and `POST /{id}/complete` (`{ reps, seq }`), `POST /{id}/leave`.
+`GET /invites/{code}` (preview), `POST /invites/{code}/join`, `POST /invites/{code}/decline` (204),
+`PUT /{id}/ready` (`{ ready }`), `POST /{id}/reps` and `POST /{id}/complete` (`{ reps, seq }`),
+`POST /{id}/leave`, `POST /{id}/invite` (`{ social_profile_id }`), `POST /{id}/cancel`.
 
 ## Squirrel Social: accounts, Nearby Discovery, invite links
 
@@ -503,7 +539,7 @@ With `DATABASE_URL` set (`backend/db/`):
   `user_personal_details` (migration 006). Both survive a redeploy. A database that is down means
   sign-in and profiles fail until it is back. Blocks are not stored here: Social owns them (ADR-032).
   Shared workout sessions are in `shared_workout_sessions` (migration 007) and Partner Hunt Connect
-  requests in `partner_requests` (migration 008).
+  requests in `partner_requests` (migrations 008, and 009 for removed connections).
 - **Every exercise session is copied** into `exercise_sessions`, and, for accounts, into the shared
   `activity_sessions` table, which is what earns the session XP (below). Session files stay the
   source of truth.

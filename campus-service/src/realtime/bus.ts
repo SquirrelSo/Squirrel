@@ -15,7 +15,10 @@ export type RealtimeEvent =
   | { type: 'activity.verified'; data: unknown; user_ids: string[] }
   | { type: 'zone.updated'; data: unknown; zone_id: string }
   | { type: 'stats.updated' | 'active.updated'; data: unknown }
-  | { type: 'notification.created'; data: unknown; user_ids: string[] };
+  | { type: 'notification.created'; data: unknown; user_ids: string[] }
+  | { type: BubbleEventType; data: unknown; user_ids: string[] };
+
+export type BubbleEventType = 'bubble.user_joined' | 'bubble.user_left' | 'bubble.activity_started' | 'bubble.activity_ended';
 
 const emitter = new EventEmitter();
 emitter.setMaxListeners(1000);

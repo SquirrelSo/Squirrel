@@ -24,7 +24,14 @@ export function configureRunBridge(s: (Partial<RunSettings> & { url: string; tok
   downUntil = 0;
 }
 
-export async function awardXp(subject: string, amount: number, reason: string, idempotency_key: string): Promise<number | null> {
+/** Reasons campus-service reports to the Run Module's XP ledger (source `campus`; limits in the cross-service contract). */
+export type XpReason = 'territory_claim' | 'territory_steal' | 'territory_defend' | 'meetup_checkin';
+
+/** XP for a meetup check-in, once per meetup per person (ADR-033 / contract: exactly 25). */
+export const MEETUP_CHECKIN_XP = 25;
+
+export async function awardXp(subject: string, amount: number, reason: XpReason, idempotency_key: string,
+  extra: { source_id?: string; metadata?: Record<string, unknown> } = {}): Promise<number | null> {
   const s = runSettings();
   if (!s) return null;
   
@@ -33,7 +40,8 @@ export async function awardXp(subject: string, amount: number, reason: string, i
     res = await fetch(s.url + '/internal/v1/xp/award', {
       method: 'POST',
       headers: { authorization: 'Bearer ' + s.token, 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ subject, amount, reason, source: 'campus', idempotency_key }),
+      body: JSON.stringify({ subject, amount, reason, source: 'campus', idempotency_key,
+        ...(extra.source_id ? { source_id: extra.source_id } : {}), ...(extra.metadata ? { metadata: extra.metadata } : {}) }),
       signal: AbortSignal.timeout(s.timeoutMs),
     });
   } catch (err) {
@@ -102,5 +110,19 @@ export async function syncBatchXp<T extends { user_id: string; xp_total: number;
       r.xp_synced_at = new Date().toISOString();
       await query(`UPDATE users SET xp_total = $1, xp_synced_at = now() WHERE id = $2`, [r.xp_total, r.user_id], q);
     }
+  }
+}
+
+/**
+ * Award XP after the caller's own commit and store the returned total in the read cache.
+ * Fire-and-forget by contract: never throws, never retries, failures are only logged.
+ */
+export async function awardXpAfterCommit(subject: string, amount: number, reason: XpReason, idempotency_key: string,
+  extra: { source_id?: string; metadata?: Record<string, unknown> } = {}): Promise<void> {
+  try {
+    const total = await awardXp(subject, amount, reason, idempotency_key, extra);
+    if (total !== null) await query(`UPDATE users SET xp_total = $2, xp_synced_at = now(), updated_at = now() WHERE id = $1`, [subject, total]);
+  } catch (err) {
+    log.warn({ err: (err as Error).message, reason, idempotency_key }, 'XP award to the Run Module failed; action kept');
   }
 }

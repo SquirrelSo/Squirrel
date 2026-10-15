@@ -12,7 +12,10 @@ import {
 import { ChallengeType, Comparator } from '../../challenges/types.js';
 import { Metric } from '../../challenges/metrics.js';
 
+import { MAX_CHALLENGE_XP_REWARD } from '../../xp/awards.js';
 import { getRateLimitOptions, rateLimitPlugin } from '../rate-limit.js';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { RATE_LIMIT_WRITE_PER_MIN } from '../../config/env.js';
 
 export const challengesRoutes: FastifyPluginAsync = async (fastify) => {
@@ -50,8 +53,14 @@ export const challengesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: 'threshold must be a valid number' });
     }
 
-    if (typeof body.xp_reward !== 'number' || !Number.isInteger(body.xp_reward) || body.xp_reward < 0) {
+    const xpReward: unknown = body.xp_reward;
+    if (typeof xpReward !== 'number' || !Number.isInteger(xpReward) || xpReward < 0) {
       return reply.code(400).send({ error: 'xp_reward must be a positive integer' });
+    }
+    // The creator chooses the reward, so it is bounded here (ADR-033); wins also count toward a
+    // per-day cap on read.
+    if (xpReward > MAX_CHALLENGE_XP_REWARD) {
+      return reply.code(422).send({ error: `xp_reward must be at most ${MAX_CHALLENGE_XP_REWARD}` });
     }
 
     if (typeof body.title !== 'string' || body.title.trim() === '') {
@@ -81,7 +90,7 @@ export const challengesRoutes: FastifyPluginAsync = async (fastify) => {
       body.threshold,
       startsAt,
       endsAt,
-      body.xp_reward
+      xpReward
     );
     return reply.code(201).send(ch);
   });
@@ -143,7 +152,10 @@ export const challengesRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post('/:id/invite', writeLimit, async (request, reply) => {
     const userId = request.userId;
     const { id } = request.params as { id: string };
-    const { invitee_id } = request.body as { invitee_id: string };
+    const { invitee_id } = (request.body ?? {}) as { invitee_id?: unknown };
+    if (typeof invitee_id !== 'string' || !UUID_REGEX.test(invitee_id)) {
+      return reply.code(400).send({ error: 'invitee_id must be a UUID' });
+    }
     try {
       await inviteUser(id, userId, invitee_id);
       return reply.code(200).send({ ok: true });

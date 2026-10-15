@@ -13,11 +13,16 @@ an accept, each side gets the other's Social profile id (people/resolve), and no
     limits   one live request per pair; one request to the same person per REQUEST_COOLDOWN_DAYS,
              however it ended; MAX_NEW_REQUESTS_PER_DAY; MAX_PENDING_OUTGOING
 
-Not built yet: a plain disconnect (mutual and silent) for two people who connected and drifted
-apart; today a block is the only way to end a connection.
+    remove   either person may remove an accepted connection (a "buddy"), silently: nothing tells
+             the other, the connection simply disappears from both lists, and the pair's cooldown
+             (REQUEST_COOLDOWN_DAYS) runs from the removal before either can ask again
 
 Notifications go through Social (partner.request, partner.accepted). The request one names nobody
 to Social: sending the sender as the actor would attach their profile before they are connected.
+A removal sends nothing (contract: `partner.disconnected` is not sent).
+
+XP: an accepted connection earns each person buddy_connected (20 XP) from the Run Module, once per
+pair per person (xp_awards.py; the idempotency key is the pair, so reconnecting earns nothing more).
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from backend import card_ids, social_blocks, social_notify, social_people
+from backend import card_ids, social_blocks, social_notify, social_people, xp_awards
 from backend.partners import requests_store, service
 from backend.partners.matching import Person, age_band, display_name, is_age_eligible, score
 from backend.partners.policy import (
@@ -40,7 +45,7 @@ from backend.partners.xp_gate import XPGate
 
 REQUEST_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
-PENDING, ACCEPTED, DECLINED, WITHDRAWN = "pending", "accepted", "declined", "withdrawn"
+PENDING, ACCEPTED, DECLINED, WITHDRAWN, REMOVED = "pending", "accepted", "declined", "withdrawn", "removed"
 
 
 def utcnow() -> datetime:
@@ -95,6 +100,12 @@ def send_request(user_id: str, card_id: str, gate: XPGate) -> dict:
         pair = [r for r in rows if to_user_id in (r["from_user"], r["to_user"])]
         if any(r["status"] == ACCEPTED for r in pair):
             raise PartnerHuntError(409, "already_connected", "You're already connected.")
+        removed = max((r["removed_at"] for r in pair if r["status"] == REMOVED and r.get("removed_at")),
+                      default=None)
+        if removed is not None and now < removed + _cooldown():
+            # Either of them removed the connection: the same wait as after any other request.
+            raise PartnerHuntError(429, "too_soon", "You can ask them again later.",
+                                   retry_after=_iso(removed + _cooldown()))
         theirs = next((r for r in pair if r["from_user"] == to_user_id and r["status"] == PENDING
                        and now < r["expires_at"]), None)
         if theirs is not None:
@@ -144,7 +155,8 @@ def accept(user_id: str, request_id: str) -> dict:
 
     with requests_store.transaction(_pair_key(user_id, sender)) as tx:
         current = tx.get(request_id)
-        if current["status"] == PENDING and now < current["expires_at"]:
+        accepted_now = current["status"] == PENDING and now < current["expires_at"]
+        if accepted_now:
             tx.set_status(request_id, ACCEPTED, now)
         elif current["status"] != ACCEPTED:
             raise _request_not_found()
@@ -157,6 +169,10 @@ def accept(user_id: str, request_id: str) -> dict:
         data={"route": f"/partner-hunt/connect/{request_id}", "request_id": request_id},
         dedupe_key=f"partner.accepted:{request_id}",
     )
+    if accepted_now:
+        for subject in (user_id, sender):
+            xp_awards.award(subject=subject, reason=xp_awards.BUDDY_CONNECTED,
+                            idempotency_key=xp_awards.buddy_key(user_id, sender, subject), source_id=request_id)
     return _connection_item(row, me, them, profile_id)
 
 
@@ -170,6 +186,26 @@ def withdraw(user_id: str, request_id: str) -> None:
     """The sender takes a request back. A request that was declined is withdrawn the same way, so the
     sender never learns it was declined."""
     _decide(user_id, request_id, as_role="from_user", status=WITHDRAWN)
+
+
+def remove_connection(user_id: str, request_id: str) -> None:
+    """Either person ends an accepted connection. Silent: the other is not told. Removing one that
+    is already removed is fine; anything that is not your connection is 404 (the same as unknown)."""
+    row = requests_store.get(request_id) if REQUEST_ID_RE.fullmatch(request_id or "") else None
+    if row is None or user_id not in (row["from_user"], row["to_user"]) or row["status"] not in (ACCEPTED, REMOVED):
+        raise _connection_not_found()
+    with requests_store.transaction(_pair_key(row["from_user"], row["to_user"])) as tx:
+        current = tx.get(request_id)
+        if current["status"] == ACCEPTED:
+            tx.mark_removed(request_id, user_id, utcnow())
+        elif current["status"] != REMOVED:
+            raise _connection_not_found()
+
+
+def buddy_subjects(user_id: str) -> set[str]:
+    """The login subjects of everyone `user_id` is connected with right now (accepted, not removed).
+    Blocks are the caller's to apply."""
+    return {_other(r, user_id) for r in requests_store.rows_for(user_id) if r["status"] == ACCEPTED}
 
 
 # --- helpers ---------------------------------------------------------------------------------------
@@ -285,3 +321,7 @@ def _not_on_board() -> PartnerHuntError:
 
 def _request_not_found() -> PartnerHuntError:
     return PartnerHuntError(404, "request_not_found", "That request isn't available any more.")
+
+
+def _connection_not_found() -> PartnerHuntError:
+    return PartnerHuntError(404, "connection_not_found", "That connection isn't available.")

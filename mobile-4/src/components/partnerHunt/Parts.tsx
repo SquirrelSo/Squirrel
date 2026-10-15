@@ -1,14 +1,19 @@
 /**
  * Partner Hunt building blocks: the person card (anonymous: first name + initial, age band, level,
  * what you share), the "what's in the way" card for each refusal, and option chips built from the
- * server's `options` (labels are never kept in the app).
+ * server's `options` (labels are never kept in the app), and Remove buddy for an accepted connection.
  */
+import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
-import type { BoardCard, Option, PartnerCard, PartnerOptions } from '@/api/partnerHunt';
-import { Button, Card, Icon, PressScale, ProgressBar } from '@/components/ui';
+import { errorCode, errorText, featureUnavailable } from '@/api/campus';
+import { partnerHuntApi, type BoardCard, type Option, type PartnerCard, type PartnerConnection, type PartnerOptions } from '@/api/partnerHunt';
+import { NotLiveYet } from '@/components/campus/States';
+import { Button, Card, Icon, PressScale, ProgressBar, tap } from '@/components/ui';
 import type { IconName } from '@/data/icons';
-import { labelsOf, type BoardBlocker } from '@/logic/partnerHunt';
+import { invalidatePartnerHunt } from '@/hooks/usePartnerHunt';
+import { labelsOf, removeBuddyNote, removeBuddyOutcome, type BoardBlocker } from '@/logic/partnerHunt';
+import { useApp } from '@/state/AppState';
 import { alpha, colors, fonts, radius } from '@/theme';
 
 const LEVEL: Record<string, string> = { beginner: 'Beginner', intermediate: 'Intermediate', advanced: 'Advanced' };
@@ -87,6 +92,57 @@ export function BlockerCard({ blocker, onRetry }: { blocker: BoardBlocker; onRet
   );
 }
 
+/**
+ * "Remove buddy" for an accepted connection: first says what it means (silent, then a 30-day wait
+ * before either of you can ask again), then DELETE …/connections/{request_id}. Already gone (404
+ * connection_not_found) reads as done; the lists are re-read either way.
+ */
+export function RemoveBuddy({ userId, connection, onRemoved }: { userId: string; connection: PartnerConnection; onRemoved?: () => void }) {
+  const { toast } = useApp();
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notLive, setNotLive] = useState(false);
+  const name = connection.person.display_name;
+
+  const remove = async () => {
+    tap('impact');
+    setBusy(true);
+    try {
+      await partnerHuntApi.removeConnection(userId, connection.request_id);
+      invalidatePartnerHunt();
+      toast(`Removed ${name}`, 'account-remove', colors.dim);
+      onRemoved?.();
+    } catch (e) {
+      setBusy(false);
+      if (featureUnavailable(e)) return setNotLive(true);
+      const outcome = removeBuddyOutcome(errorCode(e), errorText(e));
+      if (outcome.gone) {
+        invalidatePartnerHunt();
+        onRemoved?.();
+      }
+      toast(outcome.message, 'alert-circle-outline', outcome.gone ? colors.dim : colors.coral);
+    }
+  };
+
+  if (notLive) return <NotLiveYet compact name="Removing a buddy" />;
+  if (!confirm)
+    return (
+      <Text onPress={() => { tap(); setConfirm(true); }} accessibilityRole="button" style={styles.remove}>
+        Remove buddy
+      </Text>
+    );
+  return (
+    <Card style={{ gap: 8 }}>
+      <Text style={styles.removeTitle}>Remove {name}?</Text>
+      <Text style={styles.removeBody}>{removeBuddyNote(name)}</Text>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Button label="Keep" size="sm" variant="secondary" disabled={busy} onPress={() => setConfirm(false)} style={{ flex: 1 }} />
+        <Button label={busy ? '…' : 'Remove'} size="sm" variant="ghost" disabled={busy} onPress={remove} style={{ flex: 1 }} />
+      </View>
+    </Card>
+  );
+}
+
 const styles = StyleSheet.create({
   card: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: 12 },
   initial: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: alpha(colors.secondary, 0.12), borderWidth: 1, borderColor: alpha(colors.secondary, 0.4) },
@@ -101,5 +157,8 @@ const styles = StyleSheet.create({
   chipText: { color: colors.text, fontFamily: fonts.label, fontSize: 14 },
   blocker: { alignItems: 'center', gap: 10, paddingVertical: 20, borderWidth: 1 },
   blockerTitle: { color: colors.text, fontFamily: fonts.labelBold, fontSize: 18, letterSpacing: 0.8, textTransform: 'uppercase', textAlign: 'center' },
+  remove: { alignSelf: 'center', color: colors.dim, fontFamily: fonts.medium, fontSize: 13, paddingVertical: 8 },
+  removeTitle: { color: colors.text, fontFamily: fonts.labelBold, fontSize: 15, letterSpacing: 0.8, textTransform: 'uppercase' },
+  removeBody: { color: colors.sub, fontFamily: fonts.regular, fontSize: 13, lineHeight: 18 },
   blockerBody: { color: colors.sub, fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, textAlign: 'center' },
 });

@@ -19,6 +19,8 @@ import { meetupRoutes } from './meetups/routes.js';
 import { sharedZoneRoutes } from './shared-zones/routes.js';
 import { heatmapRoutes } from './heatmap/routes.js';
 import { squirrelDateRoutes } from './shared-zones/date-suggestions.js';
+import { bubbleRoutes } from './bubble/routes.js';
+import { discoverRoutes } from './discover/routes.js';
 import { getPool } from './db/pool.js';
 import { registerInboundIdentity } from './identity/inbound.js';
 import { translateOutbound } from './identity/translate.js';
@@ -35,7 +37,8 @@ export async function buildApp(opts: { logger?: boolean | object } = {}): Promis
   await app.register(rateLimit, {
     global: true, max: 300, timeWindow: '1 minute',
     keyGenerator: (req) => (req.user?.id ? `u:${req.user.id}` : `ip:${req.ip}`),
-    errorResponseBuilder: (_req, ctx) => ({ code: 'rate_limited', detail: `Too many requests. Retry in ${Math.ceil(ctx.ttl / 1000)} s.` }),
+    // The plugin throws what this returns: an ApiError carries its status (a plain object became a 500).
+    errorResponseBuilder: (_req, ctx) => new ApiError(ctx.statusCode === 403 ? 403 : 429, 'rate_limited', `Too many requests. Retry in ${Math.ceil(ctx.ttl / 1000)} s.`),
   });
   await app.register(websocket);
   await app.register(authPlugin);
@@ -72,6 +75,8 @@ export async function buildApp(opts: { logger?: boolean | object } = {}): Promis
   await app.register(sharedZoneRoutes);
   await app.register(heatmapRoutes);
   await app.register(squirrelDateRoutes);
+  await app.register(bubbleRoutes);
+  await app.register(discoverRoutes);
   await app.register(leaderboardRoutes);
   await app.register(statsRoutes);
   return app;

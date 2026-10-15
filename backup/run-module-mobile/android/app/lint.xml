@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<lint>
-    <!-- 
-      This is a known false positive when using ActivityResultContracts in Compose without
-      explicitly including the fragment library. Compose handles its own lifecycle, and
-      we are not using fragments.
-    -->
-    <issue id="InvalidFragmentVersionForActivityResult" severity="ignore" />
-</lint>

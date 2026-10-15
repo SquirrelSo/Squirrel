@@ -4,15 +4,19 @@ import { router } from 'expo-router';
 import { PROGRESS_READS_CONFIGURED, progressApi, progressReadsLive, type LifetimeProgress, type ProgressHistory, type WeeklyProgress, } from '@/api/progress';
 import { campusApi } from '@/api/campus';
 import { useRemote } from '@/api/useRemote';
+import { xpApi } from '@/api/xp';
 import { useAuth } from '@/auth/AuthProvider';
+import { ErrorState, LoadingRows } from '@/components/campus/States';
 import { AnimatedNumber, Button, Card, Display, EmptyState, FadeIn, Header, Icon, Kicker, PressScale, ProgressBar, Ring, Screen, Segmented, tap } from '@/components/ui';
 import { liveHeatmap, liveStats, type Period, type Stat } from '@/logic/progressStats';
+import { sourceRows } from '@/logic/xpHistory';
 import { alpha, colors, fonts, radius } from '@/theme';
 
 /**
  * YOUR PROGRESS: today → progress over time → performance → what to do next.
  * Every figure comes from the progress-service (daily goals, streak, XP, level, week-over-week,
- * history). The campus rank is the Squirrels board's own `me` row (the board this row opens), so
+ * history); level progress, XP this week / month and XP by source from the Run Module's
+ * /v1/xp/stats, loaded on its own so the rest of the screen works while it isn't live. The campus rank is the Squirrels board's own `me` row (the board this row opens), so
  * the two never disagree. Not configured or signed out → a "not connected" / sign-in state.
  * There is no sample data: nothing here is invented.
  */
@@ -46,6 +50,8 @@ export default function Progress() {
   const live = progressReadsLive(mode);
   const remote = useRemote(live ? 'progress:screen' : null, loadLive);
   const L = live ? remote.data : undefined;
+  const xp = useRemote(live ? 'xp:stats' : null, xpApi.stats);
+  const X = live ? xp.data : undefined;
   const [period, setPeriod] = useState<Period>('Week');
   const [metric, setMetric] = useState<Metric>('active');
 
@@ -58,8 +64,10 @@ export default function Progress() {
   const xpLeft = daily.filter((m) => m.current < m.goal).reduce((s, m) => s + m.xp, 0);
   const xpToday = L ? L.lifetime.today.xp : 0;
   const streakDays = L ? L.lifetime.streak.current : 0;
-  // Level: the server's level curve.
-  const lvl = L
+  // Level: the server's level curve (/v1/xp/stats when it's live, else /v1/progress).
+  const lvl = X
+    ? { level: X.level, into: X.level_progress.into_level, span: Math.max(1, X.level_progress.into_level + X.level_progress.needed) }
+    : L
     ? { level: L.lifetime.level.level, into: L.lifetime.level.currentXP - L.lifetime.level.xpForCurrentLevel, span: Math.max(1, L.lifetime.level.xpForNextLevel - L.lifetime.level.xpForCurrentLevel) }
     : { level: 1, into: 0, span: 1 };
   const level = lvl.level;
@@ -154,6 +162,36 @@ export default function Progress() {
           </View>
         </Card>
       </FadeIn>
+
+      {/* ================= XP ================= */}
+      <Kicker style={{ marginTop: 26 }}>XP</Kicker>
+      {X ? (
+        <Card style={{ marginTop: 8 }}>
+          <View style={[styles.todayRow, { marginTop: 0 }]}>
+            <Mini value={X.today.toLocaleString('en-IN')} label="Today" />
+            <Mini value={X.week.toLocaleString('en-IN')} label="This week" />
+            <Mini value={X.month.toLocaleString('en-IN')} label="This month" />
+          </View>
+          <View style={{ marginTop: 12 }}>
+            {sourceRows(X.by_source).map((r) => (
+              <View key={r.source} style={[styles.perfRow, styles.divider]}>
+                <Text style={styles.perfLabel}>{r.label}</Text>
+                <Text style={styles.perfValue}>{r.xp.toLocaleString('en-IN')} XP</Text>
+              </View>
+            ))}
+            <PressScale onPress={() => router.push('/xp-history')} style={[styles.perfRow, styles.divider]} scaleTo={0.99} accessibilityLabel="XP history">
+              <Icon name="history" size={18} color={colors.dim} />
+              <Text style={styles.perfLabel}>XP history</Text>
+              <Text style={styles.sub}>{X.total.toLocaleString('en-IN')} XP total</Text>
+              <Icon name="chevron-right" size={18} color={colors.dim} />
+            </PressScale>
+          </View>
+        </Card>
+      ) : xp.error ? (
+        <ErrorState cause={xp.cause} onRetry={xp.reload} compact feature="XP stats" />
+      ) : (
+        <LoadingRows rows={1} height={96} style={{ marginTop: 8 }} />
+      )}
 
       {/* ================= PROGRESS ================= */}
       <Kicker style={{ marginTop: 26 }}>Progress</Kicker>

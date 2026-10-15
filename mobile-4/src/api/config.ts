@@ -12,9 +12,6 @@
  *                                 activities → zones, presence, Active now, heatmap, shared zones. With the
  *                                 Social service, those go here and everything else stays on Social
  *                                 (api/campus/hybrid.ts). Empty: the app behaves exactly as without it.
- *   EXPO_PUBLIC_PROGRESS_API_URL  Never set: ADR-032 cancelled the progress-service and moves its 8 endpoints
- *                                 into the Run Module. Until api/progress.ts is repointed there, Progress uses
- *                                 the Run Module's XP and daily progress / challenges show "Not connected".
  *   EXPO_PUBLIC_REALTIME_URL      optional WebSocket for live updates (the backend's /v1/config can also provide it)
  * Only public URLs belong here. Never put server secrets or API keys in EXPO_PUBLIC_* variables.
  * With a URL unset, the screens that need that backend say so (Not connected / not live yet) — there
@@ -28,8 +25,6 @@ export const EXERCISE_API_URL = trim(process.env.EXPO_PUBLIC_EXERCISE_API_URL);
 export const EXERCISE_API_CONFIGURED = EXERCISE_API_URL.length > 0;
 export const AUTH_URL = trim(process.env.EXPO_PUBLIC_AUTH_URL) || EXERCISE_API_URL;
 export const AUTH_CONFIGURED = AUTH_URL.length > 0;
-export const PROGRESS_API_URL = trim(process.env.EXPO_PUBLIC_PROGRESS_API_URL);
-export const PROGRESS_API_CONFIGURED = PROGRESS_API_URL.length > 0;
 export const SOCIAL_API_URL = trim(process.env.EXPO_PUBLIC_SOCIAL_API_URL);
 export const SOCIAL_API_CONFIGURED = SOCIAL_API_URL.length > 0;
 const RAW_CAMPUS_URL = trim(process.env.EXPO_PUBLIC_CAMPUS_API_URL);

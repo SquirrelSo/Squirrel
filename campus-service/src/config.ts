@@ -39,6 +39,15 @@ export const config = {
     cacheTtlSeconds: num('SOCIAL_CACHE_TTL_SECONDS', 300),
   },
 
+  // ADR-032 / WI-07: blocks are Social's. Until the one-time import (social-backend/scripts/import_blocks.py)
+  // has copied campus's legacy `blocks` rows into Social, those rows are unioned with Social's answer. Set
+  // LEGACY_LOCAL_BLOCKS=0 right after the import: then only Social decides, so an unblock in the app
+  // (which writes Social) is never overridden by a stale local row, and the local block routes answer 410.
+  blocks: {
+    // Only an explicit "off" value drops the union: a typo must never weaken block checks.
+    legacyLocal: !['0', 'false', 'off', 'no'].includes(str('LEGACY_LOCAL_BLOCKS').trim().toLowerCase()),
+  },
+
   run: {
     apiUrl: str('RUN_API_URL').trim().replace(/\/+$/, ''),
     internalToken: str('RUN_INTERNAL_TOKEN').trim(),
@@ -109,5 +118,20 @@ export const config = {
     nearbyRadiusM: num('NEARBY_RADIUS_M', 800),
     veryCloseM: 150,
     nearbyM: 500,
+  },
+
+  // Bubble: ephemeral proximity layer (src/bubble). No coordinates are stored, only a coarse grid cell.
+  bubble: {
+    cellM: num('BUBBLE_CELL_M', 250),
+    ttlMinutes: num('BUBBLE_TTL_MINUTES', 15),
+    eventThrottleS: num('BUBBLE_EVENT_THROTTLE_S', 60),
+    notifyMinOthers: num('BUBBLE_NOTIFY_MIN_OTHERS', 3),
+    notifyWindowHours: num('BUBBLE_NOTIFY_WINDOW_HOURS', 6),
+    recentlyActiveMinutes: num('BUBBLE_RECENTLY_ACTIVE_MINUTES', 120),
+  },
+
+  // Periodic clean-up (expired presence fixes, bubble members): worker, and the API when WORKER_INLINE.
+  sweep: {
+    intervalMs: num('SWEEP_INTERVAL_MS', 60_000),
   },
 } as const;

@@ -33,10 +33,10 @@ Social profile ids; services translate through Social (`POST /internal/v1/people
 | XP — the one ledger, levels | **Run Module** (XP engine) | campus-service reports claim / steal / defend awards to the Run Module; it and Social keep only a read cache of the total (see **XP reads**). |
 | Leaderboards | **The owner of the number**: XP and hostel boards from the Run Module (Social shows them); "zones held" boards from campus-service | No board recomputes another service's number. |
 | Progress (XP history, daily rollups) | **Run Module** — absorbs the 8 endpoints the app calls on the planned progress-service | No separate progress-service is built. |
-| Named zones, territory, GPS verification, map, presence, Active now, Open to Meet, heatmap, shared zones, meetups (+ post-meetup rating) | **campus-service** | — |
+| Named zones, territory, GPS verification, map, presence, Active now, Open to Meet, heatmap, shared zones, meetups (+ post-meetup rating), Discover, Bubble | **campus-service** | Discover and Bubble read people from campus presence, names from Social and blocks from Social; neither stores coordinates. |
 | Runs, GPS route points, run territory polygons | **Run Module** | campus-service receives a one-shot copy of a run's points for zone eligibility only. |
 | Workouts, rep counting, coaching, Partner Hunt | **Exercise** | — |
-| Feed, posts, follows, notifications, events, waitlist/referrals, Squirrel Dates, badges (incl. rules: Early Bird, Night Owl, Park Regular), ambassador applications | **Social** | — |
+| Feed, posts, follows, notifications (incl. preferences and quiet hours), events, waitlist/referrals, Squirrel Dates, badges (incl. rules: Early Bird, Night Owl, Park Regular), ambassador programme (applications, referrals, tasks) | **Social** | Other services send notifications through `POST /internal/v1/notifications`; XP from the ambassador programme is reported to the Run Module. |
 | Shared workouts ("workout with a partner") | **Exercise** (decided — see open item 3) | Blocks from Social; names and profile ids through Social's `people/resolve`. |
 
 ### "Challenges" is three features
@@ -64,7 +64,11 @@ together.
 - During migration campus-service honours the union of Social's answer and its own `blocks` table;
   existing campus and Partner Hunt blocks are copied into Social once with
   `POST /internal/v1/blocks/import` (`{ blocks: [{ blocker, blocked }] }` by `sub`, safe to re-run),
-  then the local tables are dropped.
+  then the local tables are dropped. Order for campus (WI-07): (1) run
+  `social-backend/scripts/import_blocks.py --social-url https://<social> --campus-db … --apply`; (2) set `LEGACY_LOCAL_BLOCKS=0` on
+  squirrel-campus and squirrel-campus-worker, so only Social decides (an unblock in the app is no
+  longer overridden by a stale local row, and the local block routes answer 410 `blocks_moved`);
+  (3) after a release, move `migrations/pending/drop_local_blocks.sql` into `migrations/`.
 - campus-service checks blocks wherever two people meet: meetups and their notifications, shared zones,
   Nearby, Active now, map players, a person's context, and territory battles.
 
@@ -109,12 +113,12 @@ For each, the owner's side ships first; the consumer's side follows.
    the token; the body is the app's `ProfileDetails` unchanged). Each field has one source there:
    `full_name` is first + last name, `phone` the mobile, `age` derived from the date of birth and
    `college_email` the sign-in address (both read-only), so nothing is copied. Field rules are in
-   the Exercise README's "About you" section. Remaining steps:
-   - **App owner:** repoint "About you" from `PATCH /v1/me` `profile_details` (and its read from
-     `GET /v1/me`) to these routes.
-   - **campus-service owner:** stop serving `profile_details` on `/v1/me`, then drop
-     `user_profile_details` in a later migration. (Its rows are not copied: likely none; the campus
-     owner reports the count.)
+   the Exercise README's "About you" section. Status (verified 2026-10-08):
+   - **App: done.** Onboarding reads and saves "About you" through `api/profileDetails.ts` on Exercise.
+   - **campus-service: code done.** `PATCH /v1/me` rejects `profile_details` with 422 and the last code
+     that read or wrote the table (`src/users/details.ts`, unreferenced) was removed. Remaining: an
+     operator confirms `SELECT count(*) FROM user_profile_details` is 0 on production, then moves
+     `migrations/pending/007_drop_profile_details.sql` into `migrations/`.
 2. **Ambassador applications — decided: Social; reviewer unassigned.** Social serves
    `GET`/`POST /v1/ambassador/application`, where the app already sends them (it needs no code change).
    One open application per person, approved is final, and a rejected applicant may apply again after
@@ -137,8 +141,11 @@ For each, the owner's side ships first; the consumer's side follows.
      `left_at`.
    - Reps are hand-tapped in this version, sent as `{ reps, seq }`; the highest `seq` wins (retries
      and undo). Reports count until 5 seconds after `ends_at`.
-   - **No XP for hand-tapped reps:** nothing is written to the XP ledger or `activity_sessions`. The
-     result is shown, and the app says XP arrives once reps are camera-counted.
+   - **Finishing earns a flat 20 XP, not reps** (ADR-033; amended from "no XP"): settlement happens
+     once, server-side, and each player who finished (not left) with at least one rep gets one
+     `exercise/shared_workout_finished` award of 20, at most 3 a day. The rep count itself still earns
+     nothing and nothing is written to `activity_sessions`. The host may also invite a buddy (an accepted
+     Partner Hunt connection), and cancel the lobby before the countdown; there is no pause.
    - Joining (and previewing an invite) is refused if either player has blocked the other, by
      Social's block list, and refused when Social can't be checked (as Partner Hunt does). Blocks
      are checked again when a player readies up: a blocked pair's lobby closes quietly for both. A
@@ -156,17 +163,16 @@ For each, the owner's side ships first; the consumer's side follows.
 
 The app (mobile-4) switches off each capability it believes has no backend
 (`src/api/availability.ts`) and shows "not live yet" instead. Several turned out to be served
-already, by the owner this ADR names. State as of 2026-10-05 (meetup rows updated after the app's
-`88eae74` and a check of who creates meetups):
+already, by the owner this ADR names. State as of 2026-10-08 (re-checked end to end: route, app call, capability, entry screen):
 
 | Feature | Served by | State |
 |---|---|---|
-| Meetups | campus-service: `POST /v1/meetups`, `GET /v1/meetups[/{id}]`, `POST /v1/meetups/{id}/accept · decline · cancel · leave` | **Unreachable.** Nothing creates a meetup: no screen, and no service (Social, Exercise, the Run Module) calls `POST /v1/meetups`; events always carry `meetup_id: null`. No screen answers an invite either: the app calls none of accept, decline, cancel or leave. So every real user's meetup list is empty. The app owner is building the way in: planning a meetup from a zone screen, and accept, decline, leave and cancel on the meetup screen. |
-| Meetup ratings | campus-service: `GET /v1/meetups/{id}/rating`, `POST /v1/meetups/{id}/ratings` | **On, but unreachable.** The app counts it among what campus-service serves (with shared zones and the heatmap), so the rating card works when the map runs on campus-service; on any other source it stays off. It acts on a meetup, so it can't be reached until meetups can (row above). |
+| Meetups | campus-service: `POST /v1/meetups`, `GET /v1/meetups[/{id}]`, `POST /v1/meetups/{id}/accept · decline · cancel · leave` | **On and reachable.** Map → zone → "Enter territory" → `zone/[id]` "Plan a meetup here" → `meetup/new` creates it; `meetup/[id]` answers, leaves and cancels; Profile → "Meetups & check-in" lists them; meetup notifications open `/meetup/{id}`. A guest who checks in without tapping Accept now confirms the meetup too (it used to stay `proposed` and could never be rated). |
+| Meetup ratings | campus-service: `GET /v1/meetups/{id}/rating`, `POST /v1/meetups/{id}/ratings` | **On and reachable** from a completed meetup, when the map runs on campus-service. |
 | Photo uploads | Social: `POST /v1/media/uploads`, `POST /v1/media/{id}/complete` | **On.** Three app-side mismatches kept uploads from ever working (a moderation poll Social has no route for, a `meetup` purpose Social refuses, an unknown `context` field); fixed in the app. Social takes post and avatar photos only. |
 | Ambassador applications | Social: `GET`/`POST /v1/ambassador/application` | **On in the app, closed in Social.** `SOCIAL_AMBASSADOR_OPEN` stays off until a reviewer is named (open item 2), so the form shows as closed and submissions are refused. |
-| "About you" (private details) | Exercise: `GET`/`PUT /api/me/profile-details` | **Off in the app.** The backend is built (open item 1); the app still saves through `PATCH /v1/me` `profile_details` and must be repointed before `profileDetails` is switched on. |
-| Meetup check-in | campus-service: `POST /v1/meetups/{id}/check-in` | **On, but unreachable.** campus-service started serving it on 2026-10-05 and the app switched it on in `88eae74`, on the same terms as ratings (when the map runs on campus-service), after checking the body and result against the route. It acts on a meetup, so it can't be reached until meetups can (row above). |
+| "About you" (private details) | Exercise: `GET`/`PUT /api/me/profile-details` | **On.** Onboarding calls Exercise directly (ungated). The app's `profileDetails` capability only gates the retired `PATCH /v1/me` `profile_details` field and stays off. |
+| Meetup check-in | campus-service: `POST /v1/meetups/{id}/check-in` | **On and reachable** from `meetup/[id]` (1 h before to 6 h after the start), when the map runs on campus-service. Once at least two participants have checked in, each checked-in participant gets `meetup_checkin` XP, once per person per meetup; a lone check-in earns nothing. |
 
 Lesson: before building a "missing" backend, search every service for the route. Before switching a
 capability on, compare the app's requests and responses with the server's, field by field.

@@ -31,6 +31,37 @@ describe.skipIf(!HAS_DB)('Meetup check-in (integration)', () => {
     expect(rateGet.body.can_rate).toBe(true);
   });
 
+  it('an invited guest who checks in without tapping Accept confirms the meetup, so it completes and can be rated', async () => {
+    await seedUser('host8');
+    await seedUser('guest8');
+    const meetupId = await createMeetup('host8', ['guest8'], 0.1);
+
+    expect((await api('POST', `/v1/meetups/${meetupId}/check-in`, 'guest8')).status).toBe(200);
+    const after = await api('GET', `/v1/meetups/${meetupId}`, 'host8');
+    expect(after.body.status).toBe('confirmed');
+    expect(after.body.participants.find((p: { user_id: string }) => p.user_id === 'guest8').status).toBe('accepted');
+
+    // Once the start time has passed, the meetup is completed (derived on read) and the guest may rate.
+    await sql(`UPDATE meetups SET starts_at = now() - interval '1 minute' WHERE id = $1`, [meetupId]);
+    expect((await api('GET', `/v1/meetups/${meetupId}`, 'guest8')).body.status).toBe('completed');
+    expect((await api('GET', `/v1/meetups/${meetupId}/rating`, 'guest8')).body.can_rate).toBe(true);
+  });
+
+  it('a cancelled meetup refuses check-in (409 meetup_closed), so it is never revived and earns no XP', async () => {
+    await seedUser('host9');
+    await seedUser('guest9');
+    const meetupId = await createMeetup('host9', ['guest9'], 0.1);
+    expect((await api('POST', `/v1/meetups/${meetupId}/cancel`, 'host9')).status).toBe(200);
+    for (const who of ['guest9', 'host9']) {
+      const r = await api('POST', `/v1/meetups/${meetupId}/check-in`, who);
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe('meetup_closed');
+    }
+    const after = await api('GET', `/v1/meetups/${meetupId}`, 'host9');
+    expect(after.body.status).toBe('cancelled');
+    expect(after.body.participants.find((p: { user_id: string }) => p.user_id === 'guest9').status).toBe('invited');
+  });
+
   it('someone who did not check in cannot rate', async () => {
     await seedUser('host2');
     await seedUser('guest2');

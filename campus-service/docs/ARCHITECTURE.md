@@ -41,7 +41,8 @@ Revisit this decision as soon as a dedicated worker service exists. At that poin
 | `qualification_results` | one per (activity, zone): metric values, QUALIFIED/NOT_QUALIFIED/CLAIMED/EXPIRED, `expires_at`, `consumed_by_event_id` |
 | `idempotency_keys` | stored responses for ownership writes |
 | `jobs` | Postgres-backed queue |
-| `presence` | last fix per user (never exposed raw), TTL 15 min |
+| `presence` | last fix per user (never exposed raw), TTL 15 min; expired rows deleted every minute (`src/sweeper.ts`) |
+| `bubble_members` | ephemeral proximity: ~250 m grid cell + containing zone, **no coordinates**, TTL 15 min, swept every minute |
 | `challenges` | as named; notification records are owned by Social |
 
 ## The activity pipeline

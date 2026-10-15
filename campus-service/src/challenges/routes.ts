@@ -22,6 +22,7 @@ import { requireAuth, currentUser } from '../auth/plugin.js';
 import { publish } from '../realtime/bus.js';
 import { campusNotificationDedupeKey, notify } from '../notifications/service.js';
 import { getPeopleLite } from '../users/repo.js';
+import { isBlockedEitherWay } from '../blocks/service.js';
 
 export const CHALLENGE_TYPES = [
   { id: 'territory', label: 'Territory duel', description: 'Whoever holds the zone when time runs out wins.', requires_zone: true, targets: ['user', 'crew'] },
@@ -30,7 +31,7 @@ export const CHALLENGE_TYPES = [
   { id: 'group_activity', label: 'Group activity', description: 'Run or walk together; everyone who finishes gets XP.', requires_zone: false, targets: ['user', 'crew'] },
 ] as const;
 
-type ChallengeRow = {
+export type ChallengeRow = {
   id: string; type: string; created_by: string; target_type: 'user' | 'crew'; target_user_id: string | null; target_crew_id: string | null; zone_id: string | null;
   status: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired' | 'active' | 'completed';
   starts_at: string; ends_at: string | null; message: string | null; responded_by: string | null; responded_at: string | null; started_at: string | null; completed_at: string | null;
@@ -38,8 +39,9 @@ type ChallengeRow = {
   zone_name: string | null;
 };
 
-const SELECT = `SELECT ch.*, z.name AS zone_name
+export const CHALLENGE_SELECT = `SELECT ch.*, z.name AS zone_name
   FROM challenges ch LEFT JOIN zones z ON z.id = ch.zone_id`;
+const SELECT = CHALLENGE_SELECT;
 
 export type ChallengeAction = 'accept' | 'decline' | 'cancel' | 'schedule' | 'start' | 'complete';
 type ActionFacts = { isCreator: boolean; isTarget: boolean; isParticipant: boolean };
@@ -82,7 +84,7 @@ const CreateBody = z.object({
   message: z.string().trim().max(280).optional(),
 });
 
-async function serialize(rows: ChallengeRow[], viewerId: string) {
+export async function serializeChallenges(rows: ChallengeRow[], viewerId: string) {
   const people = await getPeopleLite(rows.flatMap((r) => [r.created_by, r.target_user_id, r.winner_user_id]).filter((x): x is string => !!x), getPool());
   const crewIds = rows.map((r) => r.target_crew_id).filter((x): x is string => !!x);
   const [membershipResult, crewResult] = await Promise.all([
@@ -130,7 +132,7 @@ export async function challengeRoutes(app: FastifyInstance) {
   const emit = async (r: ChallengeRow, created = false) => {
     // `actions` is viewer-specific, so realtime events must serialize once per participant.
     for (const userId of await participants(r)) {
-      const [data] = await serialize([r], userId);
+      const [data] = await serializeChallenges([r], userId);
       publish({ type: created ? 'challenge.created' : 'challenge.updated', user_ids: [userId], data });
     }
   };
@@ -156,7 +158,7 @@ export async function challengeRoutes(app: FastifyInstance) {
            LIMIT 100
          ) prioritized
          ORDER BY created_at DESC`, [user.id, box, myCrews]);
-      const challenges = await serialize(rows, user.id);
+      const challenges = await serializeChallenges(rows, user.id);
       const callerCrewStatus = membershipResult.statuses.get(user.id) ?? 'unknown';
       return {
         invites: challenges,
@@ -177,6 +179,8 @@ export async function challengeRoutes(app: FastifyInstance) {
       if (b.target.type === 'user') {
         if (b.target.id === user.id) throw errors.invalid("You can't challenge yourself");
         if (!(await one(`SELECT 1 FROM users WHERE id = $1 AND NOT is_banned`, [b.target.id]))) throw errors.notFound('Squirrel');
+        // A block in either direction hides the person (404, as profiles do); Social unreachable → 503 blocks_unreachable.
+        if (await isBlockedEitherWay(user.id, b.target.id)) throw errors.notFound('Squirrel');
       } else if (!isUuid(b.target.id) || !(await crewDisplays([b.target.id])).has(b.target.id)) throw errors.notFound('Crew');
       // One open challenge per (creator, target, zone) at a time.
       const dup = await one(`SELECT 1 FROM challenges WHERE created_by = $1 AND status IN ('pending','accepted','active') AND coalesce(target_user_id, target_crew_id::text) = $2 AND coalesce(zone_id, '') = coalesce($3, '')`, [user.id, b.target.id, b.zone_id ?? null]);
@@ -195,7 +199,7 @@ export async function challengeRoutes(app: FastifyInstance) {
           campusNotificationDedupeKey('challenge.invitation', r.id, p));
       }
       reply.code(201);
-      return (await serialize([r], user.id))[0];
+      return (await serializeChallenges([r], user.id))[0];
     });
 
     app.patch(`${base}/:id/schedule`, { preHandler: requireAuth }, async (req) => {
@@ -214,7 +218,7 @@ export async function challengeRoutes(app: FastifyInstance) {
       }
       await query(`UPDATE challenges SET starts_at = $2, ends_at = $3, updated_at = now() WHERE id = $1`, [id, b.starts_at, b.ends_at ?? null]);
       const fresh = await load(id); await emit(fresh);
-      return (await serialize([fresh], user.id))[0];
+      return (await serializeChallenges([fresh], user.id))[0];
     });
 
     for (const action of ['accept', 'decline', 'cancel', 'start', 'complete'] as const) {
@@ -224,6 +228,8 @@ export async function challengeRoutes(app: FastifyInstance) {
         const fresh = await withTransaction(async (tx) => {
           const r = await one<ChallengeRow>(`${SELECT} WHERE ch.id = $1 FOR UPDATE OF ch`, [id], tx);
           if (!r) throw errors.notFound('Challenge');
+          // Accepting a battle from someone blocked either way is refused as if it did not exist (503 if unknown).
+          if (action === 'accept' && r.created_by !== user.id && await isBlockedEitherWay(user.id, r.created_by, tx)) throw errors.notFound('Challenge');
           const isCreator = r.created_by === user.id;
           const membershipResult = await lookupCrewMembershipsWithStatus([user.id]);
           const isTarget = respondsFor(r, user.id, membershipResult.memberships);
@@ -301,7 +307,7 @@ export async function challengeRoutes(app: FastifyInstance) {
           await notify(p, 'challenge.updated', 'Challenge updated', `{actor} ${verb} the challenge${fresh.zone_name ? ` at ${fresh.zone_name}` : ''}.`, data, user.id,
             campusNotificationDedupeKey('challenge.updated', fresh.id, p, `${action}:${fresh.updated_at}`));
         }
-        return (await serialize([fresh], user.id))[0];
+        return (await serializeChallenges([fresh], user.id))[0];
       });
     }
   }

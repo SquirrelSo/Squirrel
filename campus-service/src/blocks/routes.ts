@@ -2,11 +2,17 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { many, one, query, withTransaction } from '../db/pool.js';
 import { requireAuth, currentUser } from '../auth/plugin.js';
-import { errors } from '../lib/errors.js';
+import { ApiError, errors } from '../lib/errors.js';
 import { getPeopleLite } from '../users/repo.js';
+import { config } from '../config.js';
+
+/** After the import (LEGACY_LOCAL_BLOCKS=0) nothing reads the local table, so writing it would be a silent no-op. */
+async function legacyOnly() {
+  if (!config.blocks.legacyLocal) throw new ApiError(410, 'blocks_moved', 'Blocking is managed by the Social service: POST/DELETE /v1/users/{id}/block there.');
+}
 
 export async function blockRoutes(app: FastifyInstance) {
-  app.post('/v1/users/:id/block', { preHandler: requireAuth }, async (req) => {
+  app.post('/v1/users/:id/block', { preHandler: [requireAuth, legacyOnly] }, async (req) => {
     const user = currentUser(req);
     const { id } = z.object({ id: z.string().min(1).max(128) }).parse(req.params);
     if (id === user.id) throw errors.invalid('You cannot block yourself.');
@@ -18,14 +24,14 @@ export async function blockRoutes(app: FastifyInstance) {
     return { blocked: true, user_id: id };
   });
 
-  app.delete('/v1/users/:id/block', { preHandler: requireAuth }, async (req) => {
+  app.delete('/v1/users/:id/block', { preHandler: [requireAuth, legacyOnly] }, async (req) => {
     const user = currentUser(req);
     const { id } = z.object({ id: z.string().min(1).max(128) }).parse(req.params);
     await query(`DELETE FROM blocks WHERE blocker_id = $1 AND blocked_id = $2`, [user.id, id]);
     return { blocked: false, user_id: id };
   });
 
-  app.get('/v1/me/blocks', { preHandler: requireAuth }, async (req) => {
+  app.get('/v1/me/blocks', { preHandler: [requireAuth, legacyOnly] }, async (req) => {
     const user = currentUser(req);
     const rows = await many<{ blocked_id: string; created_at: string }>(
       `SELECT blocked_id, created_at FROM blocks WHERE blocker_id = $1 ORDER BY created_at DESC, blocked_id`, [user.id],

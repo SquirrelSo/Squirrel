@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 from app import rules
 from app.schemas import UserSummary
@@ -83,7 +83,7 @@ class AmbassadorField(BaseModel):
 
 class AmbassadorApplication(BaseModel):
     id: uuid.UUID
-    status: Literal["pending", "under_review", "approved", "rejected"]
+    status: Literal["pending", "under_review", "approved", "rejected", "suspended"]
     submitted_at: datetime
     decided_at: datetime | None
     message: str | None
@@ -344,8 +344,11 @@ CAMPUS_KINDS = (
 )
 # Exercise (Partner Hunt Connect). Written by the caller like campus kinds. partner.request names no
 # actor: the two aren't connected yet, so Exercise sends the anonymous card name in the title instead.
-EXERCISE_KINDS = ("partner.request", "partner.accepted")
-NotificationKind = Literal[RUN_MODULE_KINDS + CAMPUS_KINDS + EXERCISE_KINDS]  # type: ignore[valid-type]
+EXERCISE_KINDS = ("partner.request", "partner.accepted", "shared_workout.invited", "shared_workout.finished")
+# Written by the caller too (CONTRACT §2): the Run Module's level-up, campus-service's Bubble.
+XP_KINDS = ("xp.level_up",)
+BUBBLE_KINDS = ("bubble.activity",)
+NotificationKind = Literal[RUN_MODULE_KINDS + CAMPUS_KINDS + EXERCISE_KINDS + XP_KINDS + BUBBLE_KINDS]  # type: ignore[valid-type]
 
 
 class InternalNotificationIn(_In):
@@ -595,3 +598,283 @@ class BlockList(BaseModel):
 
 CrewDetail.model_rebuild()
 EventOut.model_rebuild()
+
+
+# --------------------------------------------------------------------------- notification preferences
+
+
+def _nonempty(v: str | None) -> str | None:
+    if v is not None and not v:
+        raise ValueError("Can't be blank.")
+    return v
+
+
+NotificationCategory = Literal["xp", "challenges", "territory", "buddies", "workouts", "meetups", "bubble",
+                               "crews", "ambassador", "social", "system"]
+
+
+class CategoryChannels(BaseModel):
+    push: bool
+    in_app: bool
+    mutable: bool
+
+
+class NotificationPreferencesOut(BaseModel):
+    categories: dict[str, CategoryChannels]
+    quiet_hours_start: int | None   # minutes after local midnight
+    quiet_hours_end: int | None
+    timezone: str
+    updated_at: datetime | None
+
+
+class CategoryChannelsPatch(_In):
+    push: StrictBool | None = None
+    in_app: StrictBool | None = None
+
+
+class NotificationPreferencesPatch(_In):
+    """Only what is sent changes. Quiet hours are set or cleared together (both null = none)."""
+
+    categories: dict[NotificationCategory, CategoryChannelsPatch] | None = None
+    quiet_hours_start: Annotated[int, Field(ge=0, le=1439)] | None = None
+    quiet_hours_end: Annotated[int, Field(ge=0, le=1439)] | None = None
+    timezone: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+
+    @model_validator(mode="after")
+    def _pairs(self):
+        sent = self.model_fields_set
+        if ("quiet_hours_start" in sent) != ("quiet_hours_end" in sent):
+            raise ValueError("Send quiet_hours_start and quiet_hours_end together.")
+        if (self.quiet_hours_start is None) != (self.quiet_hours_end is None):
+            raise ValueError("Quiet hours need both a start and an end (or both null to turn them off).")
+        if self.quiet_hours_start is not None and self.quiet_hours_start == self.quiet_hours_end:
+            raise ValueError("Quiet hours can't start and end at the same minute.")
+        return self
+
+
+class AnnouncementRequest(_In):
+    title: Annotated[str, Field(min_length=1, max_length=120)]
+    body: Annotated[str, Field(max_length=240)] = ""
+    route: Annotated[str, Field(min_length=1, max_length=100, pattern=r"^/[A-Za-z0-9/_-]*$")] | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, v):
+        return _nonempty(_one_line(v))
+
+    @field_validator("body")
+    @classmethod
+    def _body(cls, v):
+        return _clean(v)
+
+
+class AnnouncementOut(BaseModel):
+    id: uuid.UUID
+    recipients: int
+
+
+# --------------------------------------------------------------------------- ambassador programme
+
+
+class AmbassadorCounts(BaseModel):
+    referred: int
+    verified: int
+    activated: int
+    rewarded: int
+    referral_xp: int
+    task_xp: int
+
+
+class AmbassadorMe(BaseModel):
+    status: Literal["active", "suspended"]
+    approved_at: datetime
+    suspended_at: datetime | None
+    suspension_reason: str | None
+    referral_code: str
+    invite_url: str | None
+    counts: AmbassadorCounts
+
+
+class ReferralPerson(BaseModel):
+    id: uuid.UUID
+    display_name: str
+    avatar_look: dict | None
+    avatar_url: str | None
+
+
+class AmbassadorReferral(BaseModel):
+    user: ReferralPerson
+    signup_at: datetime
+    verified: bool
+    activated: bool
+    reward_eligible: bool
+    rewarded: bool
+
+
+class AmbassadorReferralPage(BaseModel):
+    items: list[AmbassadorReferral]
+    next_cursor: str | None
+
+
+class AmbassadorTaskOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    description: str
+    xp_reward: int
+    starts_at: datetime
+    ends_at: datetime | None
+    active: bool
+
+
+class MySubmission(BaseModel):
+    id: uuid.UUID
+    status: Literal["submitted", "approved", "rejected"]
+    submitted_at: datetime
+    reviewed_at: datetime | None
+
+
+class AmbassadorTaskWithMine(AmbassadorTaskOut):
+    submission: MySubmission | None
+
+
+class AmbassadorTaskList(BaseModel):
+    items: list[AmbassadorTaskWithMine]
+
+
+class SubmitTaskRequest(_In):
+    evidence: Annotated[str, Field(min_length=1, max_length=1000)]
+
+    @field_validator("evidence")
+    @classmethod
+    def _evidence(cls, v):
+        return _nonempty(_clean(v))
+
+
+class AmbassadorLeaderboardEntry(BaseModel):
+    rank: int
+    user: UserSummary
+    activated_referrals: int
+    task_xp: int
+    is_me: bool
+
+
+class AmbassadorLeaderboard(BaseModel):
+    entries: list[AmbassadorLeaderboardEntry]
+
+
+class CreateAmbassadorTask(_In):
+    title: Annotated[str, Field(min_length=1, max_length=80)]
+    description: Annotated[str, Field(max_length=1000)] = ""
+    xp_reward: Annotated[int, Field(ge=1, le=200)]
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    active: bool = True
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, v):
+        return _nonempty(_one_line(v))
+
+    @field_validator("description")
+    @classmethod
+    def _description(cls, v):
+        return _clean(v)
+
+    @model_validator(mode="after")
+    def _window(self):
+        for v in (self.starts_at, self.ends_at):
+            if v is not None and v.tzinfo is None:
+                raise ValueError("Times need a timezone.")
+        if self.ends_at is not None and self.starts_at is not None and self.ends_at <= self.starts_at:
+            raise ValueError("ends_at must be after starts_at.")
+        return self
+
+
+class UpdateAmbassadorTask(_In):
+    title: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+    description: Annotated[str, Field(max_length=1000)] | None = None
+    xp_reward: Annotated[int, Field(ge=1, le=200)] | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    active: bool | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, v):
+        return _nonempty(_one_line(v))
+
+    @field_validator("description")
+    @classmethod
+    def _description(cls, v):
+        return _clean(v)
+
+    @model_validator(mode="after")
+    def _tz(self):
+        for v in (self.starts_at, self.ends_at):
+            if v is not None and v.tzinfo is None:
+                raise ValueError("Times need a timezone.")
+        return self
+
+
+class AdminSubmission(BaseModel):
+    id: uuid.UUID
+    task: AmbassadorTaskOut
+    user: UserSummary
+    status: Literal["submitted", "approved", "rejected"]
+    evidence: str
+    submitted_at: datetime
+    reviewed_at: datetime | None
+
+
+class AdminSubmissionList(BaseModel):
+    items: list[AdminSubmission]
+
+
+class SubmissionDecision(_In):
+    status: Literal["approved", "rejected"]
+
+
+class SuspendAmbassadorRequest(_In):
+    reason: Annotated[str, Field(min_length=1, max_length=500)]
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, v):
+        return _nonempty(_clean(v))
+
+
+class AmbassadorProfileOut(BaseModel):
+    user_id: uuid.UUID
+    status: Literal["active", "suspended"]
+    approved_at: datetime
+    suspended_at: datetime | None
+    suspension_reason: str | None
+
+
+class RewardOut(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    kind: Literal["referral", "task"]
+    ref_id: str
+    xp: int
+    created_at: datetime
+    awarded_at: datetime | None
+    reversed_at: datetime | None
+
+
+class RewardList(BaseModel):
+    items: list[RewardOut]
+
+
+class ReverseRewardRequest(_In):
+    reason: Annotated[str, Field(min_length=1, max_length=200)] = "reversed by admin"
+
+
+class AmbassadorAnalyticsRow(AmbassadorCounts):
+    user: UserSummary
+    status: Literal["active", "suspended"]
+
+
+class AmbassadorAnalytics(BaseModel):
+    ambassadors: list[AmbassadorAnalyticsRow]
+    totals: AmbassadorCounts

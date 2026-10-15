@@ -1,4 +1,4 @@
-import { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import crypto from 'crypto';
 import zlib from 'zlib';
 import util from 'util';
@@ -16,6 +16,45 @@ import {
 } from '../../config/env.js';
 
 const gunzip = util.promisify(zlib.gunzip);
+
+/** Fastify's default when a route sets no bodyLimit. */
+const DEFAULT_BODY_LIMIT = 1024 * 1024;
+
+function httpError(statusCode: number, error: string, message: string): Error & { statusCode: number; error: string } {
+  return Object.assign(new Error(message), { statusCode, error });
+}
+
+/**
+ * JSON bodies, optionally gzip-encoded.
+ *
+ * Fastify's bodyLimit only caps the bytes on the wire, so a few KB of gzip could inflate to gigabytes
+ * before JSON.parse (WI-03). The inflated size is capped at the same route's bodyLimit: compressing a
+ * body never lets it be larger than it could be uncompressed. Exceeding it is a 413; bad gzip or bad
+ * JSON is a 400; any other Content-Encoding is a 415 instead of being parsed as plain JSON.
+ */
+export async function parseJsonBody(req: FastifyRequest, body: Buffer): Promise<unknown> {
+  const encoding = String(req.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
+  let payload = body;
+  if (encoding === 'gzip') {
+    const maxOutputLength = req.routeOptions.bodyLimit ?? DEFAULT_BODY_LIMIT;
+    try {
+      payload = await gunzip(body, { maxOutputLength });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE' || err instanceof RangeError) {
+        req.log.warn({ compressedBytes: body.length, maxOutputLength, url: req.url }, 'gzip body inflates past the route limit');
+        throw httpError(413, 'Payload Too Large', `Decompressed body exceeds ${maxOutputLength} bytes`);
+      }
+      throw httpError(400, 'Bad Request', 'Body is not valid gzip');
+    }
+  } else if (encoding !== 'identity' && encoding !== '') {
+    throw httpError(415, 'Unsupported Media Type', `Content-Encoding ${encoding} is not supported; use gzip or none`);
+  }
+  try {
+    return JSON.parse(payload.toString('utf8'));
+  } catch {
+    throw httpError(400, 'Bad Request', 'Body is not valid JSON');
+  }
+}
 
 // Read queries
 import { readFileSync } from 'fs';
@@ -52,21 +91,13 @@ interface IdempotencyRow {
 const runsRoutes: FastifyPluginAsync = async (fastify) => {
   if (!fastify.hasDecorator('rateLimit')) await fastify.register(rateLimitPlugin);
 
-  // We need to parse application/json and application/gzip.
-  // Actually, @fastify/compress does not decompress incoming bodies automatically.
-  // We can add a content type parser for gzipped JSON.
-  
-  fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, async (req: any, body: Buffer) => {
-    let payload = body;
-    if (req.headers['content-encoding'] === 'gzip') {
-      payload = await gunzip(body);
-    }
-    return JSON.parse(payload.toString('utf8'));
-  });
+  fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, parseJsonBody);
 
+  // Auth runs onRequest, before the body is read or inflated: an unauthenticated client never costs a
+  // decompression. The rate limits stay in preHandler, keyed by the verified user id.
   fastify.post('/v1/runs', {
+    onRequest: requireAuth,
     preHandler: [
-      requireAuth,
       fastify.rateLimit(getRateLimitOptions(RATE_LIMIT_RUNS_CREATE_PER_DAY, '1 day', 'runs_create_day')),
     ],
     schema: createRunSchema,
@@ -81,8 +112,8 @@ const runsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/v1/runs/:id/points', {
+    onRequest: requireAuth,
     preHandler: [
-      requireAuth,
       fastify.rateLimit(getRateLimitOptions(RATE_LIMIT_POINTS_PER_MIN, '1 minute', 'points_min')),
       fastify.rateLimit(getRateLimitOptions(RATE_LIMIT_POINTS_PER_DAY, '1 day', 'points_day')),
     ],
@@ -172,8 +203,8 @@ const runsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/v1/runs/:id/finish', {
+    onRequest: requireAuth,
     preHandler: [
-      requireAuth,
       fastify.rateLimit(getRateLimitOptions(RATE_LIMIT_WRITE_PER_MIN, '1 minute', 'write_min')),
     ],
     schema: finishRunSchema,
@@ -203,7 +234,7 @@ const runsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get('/v1/runs/:id', {
-    preHandler: requireAuth,
+    onRequest: requireAuth,
     schema: getRunSummarySchema,
   }, async (request, reply) => {
     const runId = (request.params as { id: string }).id;

@@ -72,9 +72,9 @@ describe("GET /v1/xp compatibility contract", () => {
     const body = response.json();
     const progress = progressResponse.json();
     expect(body).toMatchObject({
-      totalXp: 100,
-      level: { level: 1, currentXP: 100, xpForCurrentLevel: 0, xpForNextLevel: 2000, progress: 0.05 },
-      bySource: { run: 70, exercise: 10, campus: 12, challenge: 8 },
+      totalXp: 130, // + the daily goal (ADR-033)
+      level: { level: 1, currentXP: 130, xpForCurrentLevel: 0, xpForNextLevel: 2000, progress: 0.065 },
+      bySource: { run: 70, exercise: 10, campus: 12, challenge: 8, daily_goal: 30 },
     });
     expect(body.totalXp).toBe(progress.totalXp);
     expect(body.level).toEqual(progress.level);

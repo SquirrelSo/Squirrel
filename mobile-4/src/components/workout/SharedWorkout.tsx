@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import type { PersonLite } from '@/api/campus/types';
-import { clock, type RaceResult, type WorkoutParticipant } from '@/logic/sharedWorkout';
+import { clock, MAX_PENDING_INVITES, SHARED_RACE_XP, type RaceResult, type WorkoutInvite, type WorkoutParticipant } from '@/logic/sharedWorkout';
 import { PersonAvatar } from '@/components/campus/PersonAvatar';
 import type { Connection } from '@/hooks/useSharedWorkout';
 import { Button, Card, Display, FadeIn, Icon, NATIVE, PressScale, ProgressBar, Pulse, tap } from '@/components/ui';
@@ -78,6 +78,36 @@ export function WaitingForPartner() {
         <Pulse size={12} color={colors.secondary} />
       </View>
       <Text style={styles.waitingText}>Waiting for your partner to join…</Text>
+    </View>
+  );
+}
+
+/** One of your Partner Hunt buddies, as the invite list shows them. */
+export type InvitableBuddy = { profileId: string; name: string };
+/** Your buddies with an Invite button each; who's invited or said no comes from the session. */
+export function BuddyInvites({ buddies, statusOf, busyId, pending, onInvite }: { buddies: InvitableBuddy[]; statusOf: (profileId: string) => WorkoutInvite['status'] | null; busyId: string | null; pending: number; onInvite: (b: InvitableBuddy) => void }) {
+  const full = pending >= MAX_PENDING_INVITES;
+  return (
+    <View style={{ gap: 8 }}>
+      {buddies.map((b) => {
+        const st = statusOf(b.profileId);
+        return (
+          <View key={b.profileId} style={styles.buddy} accessibilityLabel={`${b.name}${st === 'invited' ? ', invited' : st === 'declined' ? ', said no' : ''}`}>
+            <View style={styles.buddyInitial}>
+              <Text style={styles.buddyInitialText}>{b.name.slice(0, 1).toUpperCase()}</Text>
+            </View>
+            <Text style={styles.buddyName} numberOfLines={1}>{b.name}</Text>
+            {st === 'invited' ? (
+              <Text style={[styles.buddyState, { color: colors.gold }]}>Invited</Text>
+            ) : st === 'declined' ? (
+              <Text style={[styles.buddyState, { color: colors.dim }]}>Said no</Text>
+            ) : (
+              <Button label={busyId === b.profileId ? '…' : 'Invite'} size="sm" disabled={busyId != null || full} onPress={() => onInvite(b)} />
+            )}
+          </View>
+        );
+      })}
+      <Text style={styles.fine}>They get a notification and join with this session’s code. Up to {MAX_PENDING_INVITES} invitations can wait at once.</Text>
     </View>
   );
 }
@@ -208,8 +238,12 @@ const OUTCOME: Record<RaceResult['outcome'], { title: string; accent: string }> 
   draw: { title: 'Dead', accent: 'heat.' },
   solo: { title: 'Race', accent: 'done.' },
 };
-/** The result: who won by reps (or "waiting for your partner" while they're still racing). No XP for hand-tapped races. */
-export function SharedResult({ result, partnerName, partnerStillGoing, handTapped, onHome, onAgain }: { result: RaceResult; partnerName: string; partnerStillGoing: boolean; handTapped: boolean; onHome: () => void; onAgain: () => void }) {
+/**
+ * The result: who won by reps (or "waiting for your partner" while they're still racing). `rewarded`
+ * is the server's word from workout.session.completed (null when this screen didn't see the race
+ * settle): "+XP" only ever shows for true. Nothing here works out XP.
+ */
+export function SharedResult({ result, partnerName, partnerStillGoing, rewarded, onHome, onAgain }: { result: RaceResult; partnerName: string; partnerStillGoing: boolean; rewarded: boolean | null; onHome: () => void; onAgain: () => void }) {
   const o = partnerStillGoing ? { title: 'You’re', accent: 'done.' } : OUTCOME[result.outcome];
   return (
     <FadeIn style={{ gap: 14 }}>
@@ -227,7 +261,15 @@ export function SharedResult({ result, partnerName, partnerStillGoing, handTappe
         ) : result.outcome !== 'solo' ? (
           <Text style={styles.row}>{result.outcome === 'won' ? 'You' : partnerName} did more reps.</Text>
         ) : null}
-        {handTapped && <Text style={styles.fine}>No XP for this one: reps were tapped by hand. XP comes once the camera counts them.</Text>}
+        {rewarded === true ? (
+          <View style={styles.xp} accessibilityLabel={`Plus ${SHARED_RACE_XP} XP for finishing`}>
+            <Icon name="star-four-points" size={14} color={colors.primary} />
+            <Text style={styles.xpText}>+{SHARED_RACE_XP} XP · for finishing</Text>
+          </View>
+        ) : rewarded === false ? (
+          <Text style={styles.fine}>No XP for this one. XP is for finishing a race without leaving, with at least one rep.</Text>
+        ) : null}
+        <Text style={styles.fine}>Finishing a race (not leaving, at least one rep) earns {SHARED_RACE_XP} XP, up to 3 races a day.</Text>
       </Card>
       <View style={{ flexDirection: 'row', gap: 8 }}>
         <Button label="Home" size="md" variant="secondary" onPress={onHome} style={{ flex: 1 }} />
@@ -237,10 +279,11 @@ export function SharedResult({ result, partnerName, partnerStillGoing, handTappe
   );
 }
 
-export type EndedKind = 'signed_out' | 'closed' | 'you_left' | 'expired' | 'unavailable' | 'connection_lost' | 'already_completed' | 'full' | 'not_found' | 'error';
+export type EndedKind = 'signed_out' | 'closed' | 'cancelled' | 'you_left' | 'expired' | 'unavailable' | 'connection_lost' | 'already_completed' | 'full' | 'not_found' | 'error';
 const ENDED: Record<EndedKind, { icon: React.ComponentProps<typeof Icon>['name']; title: string; body: string; color: string }> = {
   signed_out: { icon: 'account-lock-outline', title: 'Sign in first', body: 'Shared workouts use your account, so your partner sees who they’re racing.', color: colors.dim },
   closed: { icon: 'flag-checkered', title: 'This session ended', body: 'Start a new one any time.', color: colors.dim },
+  cancelled: { icon: 'close-circle-outline', title: 'Session cancelled', body: 'The host called it off before the start.', color: colors.dim },
   you_left: { icon: 'exit-run', title: 'You left the race', body: 'Your reps stopped where they were. Start another one any time.', color: colors.dim },
   expired: { icon: 'timer-sand-complete', title: 'This invite ran out', body: 'Nobody started within 10 minutes. Create a new session to try again.', color: colors.dim },
   unavailable: { icon: 'progress-wrench', title: 'Shared workouts aren’t live yet', body: 'Workout-with-a-partner switches on when its backend is ready. You can still train solo.', color: colors.violet },
@@ -306,5 +349,12 @@ const styles = StyleSheet.create({
   ctlText: { color: colors.sub, fontFamily: fonts.label, fontSize: 12, letterSpacing: 0.8, textTransform: 'uppercase' },
   row: { color: colors.text, fontFamily: fonts.semibold, fontSize: 15 },
   rowK: { color: colors.dim, fontFamily: fonts.label, fontSize: 13, letterSpacing: 1, textTransform: 'uppercase' },
+  buddy: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 12, paddingVertical: 10 },
+  buddyInitial: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: alpha(colors.secondary, 0.12), borderWidth: 1, borderColor: alpha(colors.secondary, 0.4) },
+  buddyInitialText: { color: colors.secondary, fontFamily: fonts.display, fontSize: 18 },
+  buddyName: { flex: 1, color: colors.text, fontFamily: fonts.bold, fontSize: 14 },
+  buddyState: { fontFamily: fonts.labelBold, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' },
+  xp: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', borderWidth: 1, borderColor: alpha(colors.primary, 0.5), backgroundColor: alpha(colors.primary, 0.1), borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4 },
+  xpText: { color: colors.primary, fontFamily: fonts.labelBold, fontSize: 13, letterSpacing: 1, textTransform: 'uppercase' },
   endIcon: { width: 76, height: 76, borderRadius: 38, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
 });

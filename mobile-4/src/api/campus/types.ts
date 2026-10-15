@@ -15,6 +15,8 @@
  * Crossing a zone never changes ownership by itself.
  */
 
+import type { BubbleEventName, PersonCard as FeaturePersonCard } from '@/api/featureContracts';
+
 /** [lat, lng] in WGS84. */
 export type LatLng = [number, number];
 
@@ -645,7 +647,7 @@ export type MeetupRatingResult = { meetup_id: string; submitted_at: string; trus
 // ---------------------------------------------------------------------------
 
 export type AmbassadorField = { key: string; label: string; type: 'text' | 'multiline' | 'select'; required: boolean; max_length: number | null; options?: string[] | null; placeholder?: string | null; prefill?: string | null };
-export type AmbassadorStatus = 'pending' | 'under_review' | 'approved' | 'rejected';
+export type AmbassadorStatus = 'pending' | 'under_review' | 'approved' | 'rejected' | 'suspended';
 export type AmbassadorApplication = { id: string; status: AmbassadorStatus; submitted_at: string; decided_at: string | null; message: string | null };
 export type AmbassadorState = { open: boolean; closed_reason: string | null; application: AmbassadorApplication | null; fields: AmbassadorField[] };
 
@@ -663,7 +665,17 @@ export type RealtimeMessage =
   | { type: 'relationship.updated'; data: Relationship }
   | { type: 'friendship.created'; data: { friend: PersonLite & { level: number; xp: number }; relationship: Relationship } }
   | { type: 'notification.created'; data: AppNotification }
-  | { type: 'players.updated'; data: { as_of: string } };
+  | { type: 'players.updated'; data: { as_of: string } }
+  | { type: BubbleEventName; data: BubbleEvent };
+
+/**
+ * campus-service bubble.* (topic `bubble`, added on auth): one neighbour's card as you'd see it,
+ * without `states` (the server doesn't know your zone or activity when it sends it). Never a position.
+ */
+export type BubbleEvent = Pick<FeaturePersonCard, 'person' | 'activity' | 'proximity' | 'zone'> & {
+  state: 'joined' | 'left' | 'activity_started' | 'activity_ended';
+  at: string;
+};
 
 // ---------------------------------------------------------------------------
 // The service interface both implementations satisfy

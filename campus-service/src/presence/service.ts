@@ -56,7 +56,10 @@ export type ActiveRow = {
 export async function activePeople(viewerId: string, viewerOpen: boolean, q: Queryable = getPool()) {
   const rows = await many<ActiveRow>(
     `WITH me AS (SELECT geom FROM presence WHERE user_id = $1 AND expires_at > now())
-     SELECT u.id AS user_id, u.display_name, u.avatar_url, h.short_name AS hostel, u.connection_mode, u.bio, u.open_to_meet, u.xp_total, u.xp_synced_at,
+     SELECT u.id AS user_id, u.display_name, u.avatar_url, h.short_name AS hostel, u.connection_mode, u.bio,
+            -- consent as it stands now: Open to Meet on AND not lapsed (open_to_meet_until in the past = off)
+            (u.open_to_meet AND (u.open_to_meet_until IS NULL OR u.open_to_meet_until > now())) AS open_to_meet,
+            u.xp_total, u.xp_synced_at,
             p.activity_type, p.activity_started_at, p.updated_at,
             (SELECT ST_Distance(p.geom::geography, me.geom::geography) FROM me) AS distance_m
      FROM presence p JOIN users u ON u.id = p.user_id LEFT JOIN hostels h ON h.id = u.hostel_id
@@ -75,7 +78,11 @@ export async function activePeople(viewerId: string, viewerOpen: boolean, q: Que
   return { active, nearby, active_now: rows.length };
 }
 
-/** Expire stale presence rows (cheap; run from the worker loop or a cron). */
-export async function sweepPresence() {
-  await query(`DELETE FROM presence WHERE expires_at < now() - interval '1 day'`);
+/**
+ * Delete expired presence rows, so an exact fix is never kept past its 15-minute TTL.
+ * Scheduled every minute by src/sweeper.ts (worker process, and the API when WORKER_INLINE).
+ */
+export async function sweepPresence(q: Queryable = getPool()): Promise<number> {
+  const r = await query(`DELETE FROM presence WHERE expires_at <= now()`, [], q);
+  return r.rowCount ?? 0;
 }

@@ -23,6 +23,7 @@ import { blocksApi, challengesApi, communityApi, crewsApi, datesApi, eventsApi, 
 import { profileApi, type Follower, type PublicProfile } from '@/api/social';
 import { jwtSubject } from '@/auth/jwt';
 import { appRoute } from '@/notifications/routes';
+import { kindRoute } from '@/logic/notificationPrefs';
 import { CAMPUS_CENTER } from '@/api/campus/campusBaseMap';
 import type * as T from '@/api/campus/types';
 
@@ -213,7 +214,9 @@ function notification(n: Awaited<ReturnType<typeof notificationsApi.list>>['item
   const data: NonNullable<T.AppNotification['data']> = {};
   for (const k of NOTIFICATION_DATA_KEYS) if (typeof n.data[k] === 'string') data[k] = n.data[k] as string;
   if (typeof n.data.challenge_id === 'string') data.invite_id = n.data.challenge_id;
-  const route = appRoute(n.data.route);
+  // The kinds this build adds open fixed screens (logic/notificationPrefs.ts); the rest follow Social's route.
+  const fixed = kindRoute(n.kind, n.data);
+  const route = fixed === undefined ? appRoute(n.data.route) : fixed && appRoute(fixed);
   if (route) data.route = route;
   const kind = n.kind.startsWith('challenge') ? 'invite' : n.kind.startsWith('event') ? 'event' : n.kind.startsWith('steal') || n.kind.startsWith('territory') ? 'territory' : n.kind;
   return { id: n.id, type: kind, actor: n.actor ? person(n.actor) : null, text: n.body ? `${n.title} · ${n.body}` : n.title, created_at: n.created_at, read: n.read, data };
@@ -381,7 +384,8 @@ export const socialCampusApi: T.CampusApi = {
     const page = await notificationsApi.list(cursor);
     return { items: page.items.map(notification), unread: page.unread, next_cursor: page.next_cursor ?? null };
   },
-  markNotificationsRead: (ids) => notificationsApi.markRead(ids),
+  // The contract's "empty = all": Social marks all only when `ids` is left out (an empty list marks none).
+  markNotificationsRead: (ids) => notificationsApi.markRead(ids.length ? ids : undefined),
 
   sharedZones: notLive('Shared zones'),
   heatmap: notLive('The activity heatmap'),
