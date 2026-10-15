@@ -27,6 +27,10 @@ SHARED_WORKOUTS_DIR = _REPO_ROOT / "data" / "shared_workouts"
 # Partner Hunt Connect requests without DATABASE_URL: one file for everyone's requests.
 PARTNER_REQUESTS_FILE = _REPO_ROOT / "data" / "partner_hunt" / "requests.json"
 
+def user_dir(user_id: str) -> Path:
+    """Absolute path to a single user's directory under USERS_DIR."""
+    return USERS_DIR / user_id
+
 # --- Squirrel Social: auth, nearby discovery, deep links ----------------------
 # Everything below is read through this module at call time (e.g. `config.AUTH_DIR`) so tests can
 # monkeypatch a temp directory exactly as they do for USERS_DIR.
