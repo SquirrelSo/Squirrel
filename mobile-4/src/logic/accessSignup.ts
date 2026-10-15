@@ -32,6 +32,12 @@ export function emailStartRefused(email: string, serverMessage: string): Error {
 }
 
 /** "  Asha   Rao " → { first_name: 'Asha', last_name: 'Rao' }; one word → empty last name. */
+/** A typed Indian mobile number in any common shape -> +91XXXXXXXXXX, or null if it is not one. */
+export function normalizeIndianMobile(raw: string): string | null {
+  const compact = raw.trim().replace(/[\s\-().]/g, '');
+  const m = /^(?:\+91|91|0)?([6-9]\d{9})$/.exec(compact);
+  return m ? `+91${m[1]}` : null;
+}
 export function splitFullName(full: string): { first_name: string; last_name: string } {
  const words = full.trim().split(/\s+/).filter(Boolean);
  return { first_name: words[0] ?? '', last_name: words.slice(1).join(' ') };
@@ -50,7 +56,7 @@ export class SignupError extends Error {
 }
 
 const FIELD_MESSAGE: Record<SignupField, string> = {
- email: 'That email address doesn't look right. Check it and try again.',
+ email: 'That email address doesn\'t look right. Check it and try again.',
  full_name: 'Enter your full name.',
  phone: 'Enter a 10-digit Indian mobile number, like 98300 41275.',
  access_code: 'The access code is six digits.',
@@ -76,8 +82,8 @@ export function classifySignupError(status: number, body: unknown, message: stri
  }
  if (status === 403) {
    if (typeof detail === 'string' && /institute/i.test(detail)) return new SignupError('That\'s a campus address. Use the institute email sign-in instead.', 'email');
-   return new SignupError('That access code didn't work. Check it and try again.', 'access_code');
+   return new SignupError('That access code didn\'t work. Check it and try again.', 'access_code');
  }
- if (status === 0) return new SignupError('Can't reach the server. Check your connection and try again.', null);
+ if (status === 0) return new SignupError('Can\'t reach the server. Check your connection and try again.', null);
  return new SignupError(message || 'Sign-up failed. Try again in a moment.', null);
 }
