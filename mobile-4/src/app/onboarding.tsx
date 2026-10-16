@@ -44,7 +44,8 @@ export default function Onboarding() {
   const [hostel, setHostel] = useState<string | null>(null);
   const auth = useAuth();
   const courses = config.data?.campus.courses?.length ? config.data.campus.courses : DEFAULT_COURSES;
-  const saved = useRemote(PROFILE_DETAILS_CONFIGURED && auth.mode === 'live' ? 'ex:profile-details' : null, profileDetailsApi.get);
+  const detailsRequested = PROFILE_DETAILS_CONFIGURED && auth.mode === 'live';
+  const saved = useRemote(detailsRequested ? 'ex:profile-details' : null, profileDetailsApi.get);
   const [details, setDetailsState] = useState<DetailsForm | null>(null);
   // Exercise's own field errors from the last save; cleared as soon as you edit the form.
   const [serverErrors, setServerErrors] = useState<DetailsErrors>({});
@@ -69,8 +70,8 @@ export default function Onboarding() {
   const missing = Object.keys(detailErrors).length;
   // Not configured, or the route not deployed (found on load or at save time): save the rest, say so.
   const [detailsLive, setDetailsLive] = useState(PROFILE_DETAILS_CONFIGURED);
-  const detailsUsable = detailsLive && !(saved.error && featureUnavailable(saved.error));
-  const detailsLoading = detailsUsable && !saved.data && !saved.error;
+  const detailsUsable = detailsRequested && detailsLive && !(saved.error && featureUnavailable(saved.error));
+  const detailsLoading = detailsRequested && detailsUsable && !saved.data && !saved.error;
   const save = useAction(async (patch: Parameters<typeof campusApi.updateMe>[0]) => {
     if (detailsUsable) {
       try {
@@ -144,6 +145,8 @@ export default function Onboarding() {
           <View style={{ marginTop: 16 }}>
             {detailsLoading ? (
               <LoadingRows rows={5} height={58} />
+            ) : !detailsRequested ? (
+              <NotLiveYet name="Profile details" body="Sign in to build your profile — you’re just looking around at the moment, so there’s nothing to save yet." />
             ) : detailsUsable ? (
               <ProfileDetailsForm value={form} onChange={setDetails} errors={detailErrors} showAll={showAllErrors} courses={courses} />
             ) : (
@@ -227,7 +230,7 @@ export default function Onboarding() {
               {hostelOptions.none && <Text style={styles.note}>Hostels aren’t set up yet. You can pick yours later in Edit profile.</Text>}
             </View>
           )}
-          {!detailsUsable && (
+          {detailsRequested && !detailsUsable && (
             <View style={styles.notice} accessibilityLiveRegion="polite">
               <Icon name="progress-wrench" size={16} color={colors.violet} />
               <Text style={styles.noticeText}>Profile details aren’t saved yet — that part isn’t live. Your mode, hostel and setup will be saved.</Text>
