@@ -1567,6 +1567,47 @@
   .v2-pill { font-family: var(--v2-mono); font-weight: 600; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; }
   .v2-pill--live { color: var(--v2-green); background: rgba(62,207,142,.1); border: 1px solid rgba(62,207,142,.4); }
   .v2-pill--soon { color: #FFB02E; background: rgba(255,176,46,.1); border: 1px solid rgba(255,176,46,.38); }
+
+  /* ===== Partner Hunt (ModeSelect → Partner Hunt tab) ===== */
+  .v2-ph { max-width: 980px; }
+  .v2-ph__muted { font-size: 13px; line-height: 1.55; color: var(--v2-mute); margin: 0; }
+  .v2-ph__hint { font-size: 11.5px; color: var(--v2-faint); margin-top: 6px; line-height: 1.45; }
+  .v2-ph__panel, .v2-ph__gate, .v2-ph__form { gap: 12px; margin-bottom: 16px; }
+  .v2-ph__panel--amber { border-color: rgba(255,176,46,.38); }
+  .v2-ph__panel--red { border-color: rgba(229,72,77,.45); }
+  .v2-ph__paneltitle { font-family: var(--v2-disp); font-weight: 700; font-size: 19px; letter-spacing: -.01em; color: var(--v2-ink); }
+  .v2-ph__xp { display: flex; align-items: baseline; gap: 8px; }
+  .v2-ph__xpnum { font-family: var(--v2-disp); font-weight: 700; font-size: 44px; line-height: 1; color: var(--v2-ink); font-variant-numeric: tabular-nums; }
+  .v2-ph__xpof { font-family: var(--v2-mono); font-size: 13px; color: var(--v2-mute); }
+  .v2-ph__bar { height: 8px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+  .v2-ph__barfill { height: 100%; border-radius: 999px; background: var(--v2-green); transition: width .4s ease; }
+  .v2-ph__field { gap: 2px; }
+  .v2-ph__chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .v2-ph__toggle { display: flex; align-items: flex-start; gap: 10px; font-size: 13.5px; color: var(--v2-ink); cursor: pointer; }
+  .v2-ph__toggle input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--v2-green); }
+
+  /* Sign-up page 2 (ProfileDetails.tsx) — reuses page 1's sections and Partner Hunt's chips/toggle. */
+  .v2-pd__stack { display: flex; flex-direction: column; gap: 16px; }
+  .v2-pd__note { color: var(--v2-mute); }
+  .v2-ph__ages { display: flex; align-items: center; gap: 10px; }
+  .v2-ph__ages .v2-input { width: 96px; }
+  .v2-ph__actions { display: flex; justify-content: flex-end; gap: 10px; }
+  .v2-ph__barrow { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .v2-ph__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .v2-ph__card { gap: 12px; }
+  .v2-ph__cardtop { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .v2-ph__name { font-family: var(--v2-disp); font-weight: 700; font-size: 18px; color: var(--v2-ink); }
+  .v2-ph__score { flex: none; font-family: var(--v2-mono); font-weight: 600; font-size: 11px; color: var(--v2-green); background: rgba(62,207,142,.1); border: 1px solid rgba(62,207,142,.4); padding: 5px 10px; border-radius: 999px; }
+  .v2-ph__reasons { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.6; color: var(--v2-ink); }
+  .v2-ph__cardfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 4px; }
+  .v2-ph__linkbtn { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; padding: 4px 0; cursor: pointer; font-family: var(--v2-body); font-size: 12.5px; color: var(--v2-mute); }
+  .v2-ph__linkbtn:hover { color: var(--v2-red); }
+  .v2-ph__confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; color: var(--v2-ink); }
+  .v2-ph__danger { background: var(--v2-red); color: #fff; }
+  @media (max-width: 640px) {
+    .v2-ph__barrow { flex-direction: column; align-items: flex-start; }
+    .v2-ph__xpnum { font-size: 36px; }
+  }
   .v2-chip { font-family: var(--v2-body); font-weight: 500; font-size: 11.5px; color: var(--v2-mute); padding: 5px 11px; border-radius: 8px; background: rgba(255,255,255,.04); border: 1px solid var(--v2-line); }
 
   /* training mode: split panel (left) + stacked cards (right) */

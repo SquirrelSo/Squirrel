@@ -26,11 +26,23 @@ transitions:
   - {from: reset, to: reset, when: tracking_recovery_failed, action: reset_attempt}
   - {from: reset, to: setup, when: reset_dwell_elapsed, action: reset_attempt, emit: rep_cycle_completed}
 
-# Initial development concepts only. Phase 4/5 rig evidence owns production tuning.
-movement_start: 0.15
-reset: 0.10
-min_lift_peak: 0.30
-turnaround_ms: 150
-reset_dwell_ms: 200
+# Progress is 0 at the standing knee height and 1 with the knee at hip height. A lift: the knee
+# rises past min_lift_peak, then drops back within `reset` of standing. The generous band and short
+# dwell keep up with fast, bouncy high knees where the foot barely settles between lifts.
+# min_lift_peak 0.60 (was 0.40, about a 53 degree thigh lift): field testing counted a slow march;
+# a high knee brings the thigh most of the way to horizontal.
+movement_start: 0.30
+reset: 0.25
+min_lift_peak: 0.60
+turnaround_ms: 100
+reset_dwell_ms: 100
 stale_phase_ms: 5000
+# Slow cameras (under 10 frames a second) and a joint hidden for a moment must not throw the rep
+# away; only a longer dropout does.
+max_tracking_gap_ms: 1000
 
+# A high knee is a run on the spot, about two lifts a second (one per leg each second). A lift slower
+# than this from leaving the standing band to returning to it is a march: it is shown and coached,
+# never counted (field test: a slow left-right march counted as high knees).
+max_lift_ms: 900
+too_slow_cue: "Faster: run on the spot, knees up."

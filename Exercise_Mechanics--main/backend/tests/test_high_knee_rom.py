@@ -103,17 +103,28 @@ def test_whole_body_vertical_bounce_without_knee_lift_stays_zero():
     assert reading.right_progress_raw == pytest.approx(0.0)
 
 
-def test_post_baseline_camera_scale_change_is_measured_not_secretly_compensated():
-    # Phase 7 characterization: an 80% live image scale turns a standing 150px gap into 120px,
-    # so the deliberately uncompensated signal reports 0.2. Rig evidence decides whether this is
-    # material; the kernel must not hide it behind an invented normalizer.
+def test_standing_further_from_the_camera_than_at_setup_still_reads_standing():
+    # An 80% live image scale turns a standing 150px gap into 120px. Uncompensated, that read as
+    # 0.2 of a lift while standing, close to the reset band, so lifts stopped completing. The live
+    # torso length carries the same 80%, and rescaling by it reads standing as 0.
     frame = _baseline()
     for point in frame.values():
         point["x"] *= 0.8
         point["y"] *= 0.8
     reading = _rule().read(frame)
-    assert reading.left_progress_raw == pytest.approx(0.2)
-    assert reading.right_progress_raw == pytest.approx(0.2)
+    assert reading.left_progress_raw == pytest.approx(0.0)
+    assert reading.right_progress_raw == pytest.approx(0.0)
+
+
+def test_shoulders_out_of_frame_still_read_the_knees():
+    frame = _baseline()
+    del frame["left_shoulder"]
+    frame["right_shoulder"]["v"] = 0.1
+    frame["left_knee"]["y"] = 250.0 + 150.0 * 0.4   # knee 60% of the way up
+    reading = _rule().read(frame)
+    assert reading.left_available and reading.right_available
+    assert reading.left_progress_raw == pytest.approx(0.6)
+    assert reading.right_progress_raw == pytest.approx(0.0)
 
 
 def test_raw_values_outside_display_range_are_preserved_and_display_clamped():
@@ -157,12 +168,13 @@ def test_missing_knee_is_unavailable_only_on_that_side():
     assert reading.right_available is True
 
 
-def test_collapsed_or_nonfinite_shared_torso_makes_both_sides_unavailable():
+def test_collapsed_torso_falls_back_to_image_up_but_nonfinite_hips_are_unavailable():
     collapsed = _baseline()
     collapsed["left_shoulder"].update(collapsed["left_hip"])
     collapsed["right_shoulder"].update(collapsed["right_hip"])
     reading = _rule().read(collapsed)
-    assert not reading.left_available and not reading.right_available
+    assert reading.left_available and reading.right_available
+    assert reading.left_progress_raw == pytest.approx(0.0)
 
     nonfinite = _baseline()
     nonfinite["left_hip"]["v"] = float("nan")

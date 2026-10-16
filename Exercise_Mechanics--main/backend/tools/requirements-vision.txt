@@ -1,0 +1,37 @@
+# Extra dependencies for the LOCAL vision tools in this directory (live_pushup.py,
+# vision_source.py). Deliberately separate from ../../requirements.txt: the deployed service does
+# no pose inference — MediaPipe runs in the browser and the backend receives landmark JSON — so
+# these must not be installed into the container image.
+#
+#   pip install -r backend/tools/requirements-vision.txt
+#
+# ---------------------------------------------------------------------------------------------
+# WHY MEDIAPIPE IS PINNED TO THE 0.10.2x LINE
+# ---------------------------------------------------------------------------------------------
+# MediaPipe ships two Python APIs, and which one an install has depends on its version:
+#
+#   <= 0.10.21   mp.solutions.pose (legacy, CPU-only)  AND  the Tasks API
+#   0.10.30+     Tasks API only — mp.solutions was removed
+#   1.0+         Tasks API only
+#
+# On macOS the Tasks API pose graph reaches for Metal inside TensorsToDetectionsCalculator, and
+# where that GPU service is not wired up the process does not raise an exception, it ABORTS:
+#
+#   F graph_service.h:139] Check failed: service_ Service is unavailable.
+#   @ -[DrishtiMetalHelper initWithCalculatorContext:]
+#
+# The legacy mp.solutions.pose path has no Metal code, so it runs everywhere. 0.10.21 is the last
+# release that still carries it, hence this pin — it is verified working on both macOS and Linux,
+# and vision_source.select_backend picks it automatically.
+#
+# On Linux you may instead use a current release (`pip install 'mediapipe>=1.0'`); the tool detects
+# that mp.solutions is gone and falls back to the Tasks API, which downloads a .task bundle into
+# backend/tools/.models/ on first use. Force either with `--backend solutions|tasks`.
+#
+# MediaPipe on Linux also needs EGL/GLES present even for CPU-only inference:
+#   sudo apt-get install -y libegl1 libgles2
+# ---------------------------------------------------------------------------------------------
+
+mediapipe==0.10.21           # verified on macOS + Linux; see the note above before bumping
+numpy>=1.26,<2               # verified: 1.26.4
+opencv-python>=4.9           # verified: 4.11.0 (use opencv-python-headless if you only need --out)

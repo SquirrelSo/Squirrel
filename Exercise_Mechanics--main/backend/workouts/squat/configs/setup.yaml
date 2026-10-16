@@ -27,4 +27,6 @@ baseline:
     min_valid_coverage: 0.80
     invalid_pause_ms: 250
     invalid_reset_ms: 1000
-    max_joint_stddev_px: 8
+    # Stillness as a fraction of the person's torso length (training/baseline.py), so it holds at
+    # any distance. Real footage: holding still 0.06-0.085, still stepping into place 0.22+.
+    max_joint_stddev_torso: 0.12

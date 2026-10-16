@@ -6,7 +6,8 @@ Everything here is READ-ONLY aggregation over files the training capture already
   .../workouts/{exercise}/set_{n}/rep_{m}/form_score.json
   .../workouts/{exercise}/set_{n}/rep_{m}/metadata.json   (embeds template config + coaching)
 
-No scoring is recomputed — form_score.json is authoritative. Output shapes match the frontend
+No rep scoring is recomputed — form_score.json is authoritative. The Workout Score
+(workout_score.py) is built on top of it. Output shapes match the frontend
 contracts in frontend-react/src/flow/storage.ts (SessionReport, SessionOverview, ProgressData,
 SessionListItem) exactly.
 """
@@ -15,10 +16,13 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from backend.activity_rating.store import read_rating
 from backend.config import user_dir
+from backend.localtime import now_local, to_local
+from backend.reports.workout_score import activity_metrics, rep_workout_score, timed_workout_score, trend
 from backend.sessions.store import read_session_record
 
 # Quality bands mirror the frontend (tokens.tsx formBand / charts.tsx scoreColor).
@@ -59,12 +63,13 @@ def _session_dir(uid: str, sid: str) -> Path:
 
 # ----------------------------------------------------------------- date helpers
 
-def _parse_created(created_at: str | None) -> tuple[str, str, str]:
-    """(date 'YYYY-MM-DD', day 'Mon', start_time 'HH:MM') from an ISO timestamp."""
+def _parse_created(created_at: str | None, time_zone: object = None) -> tuple[str, str, str]:
+    """(date 'YYYY-MM-DD', day 'Mon', start_time 'HH:MM') of an ISO timestamp on the person's own
+    clock: the session's time zone (backend/localtime.py), never UTC."""
     if not created_at:
         return "", "", ""
     try:
-        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        dt = to_local(datetime.fromisoformat(created_at.replace("Z", "+00:00")), time_zone)
     except ValueError:
         return created_at[:10], "", ""
     return dt.strftime("%Y-%m-%d"), dt.strftime("%a"), dt.strftime("%H:%M")
@@ -72,6 +77,10 @@ def _parse_created(created_at: str | None) -> tuple[str, str, str]:
 
 def _round(value: float | None, digits: int = 1) -> float | None:
     return None if value is None else round(value, digits)
+
+
+def _number(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def _quality_bucket(score: float | None) -> str | None:
@@ -137,10 +146,14 @@ def _rep_rule_phase(form_score: dict) -> dict[str, dict[str, float]]:
     return out
 
 
-def _collect_reps(workout_dir: Path) -> tuple[list[dict], dict[str, dict]]:
-    """Return (per-rep records, template config keyed by rule_id) for one exercise."""
+def _collect_reps(workout_dir: Path) -> tuple[list[dict], dict[str, dict], dict[str, int]]:
+    """Return (per-rep records, template config keyed by rule_id, attempts that did not count by
+    reason) for one exercise. Only reps that counted toward the set are reps: an attempt the
+    counting policy rejected (short of full range, too fast, under the minimum) is tallied by its
+    reason instead, so the report shows it without paying for it."""
     reps: list[dict] = []
     templates: dict[str, dict] = {}
+    not_counted = {"shallow": 0, "too_fast": 0, "other": 0}
     for set_no, set_dir in _numbered_dirs(workout_dir, _SET_RE):
         for rep_no, rep_dir in _numbered_dirs(set_dir, _REP_RE):
             fs = _read_json(rep_dir / "form_score.json")
@@ -149,7 +162,13 @@ def _collect_reps(workout_dir: Path) -> tuple[list[dict], dict[str, dict]]:
             if not templates:
                 meta = _read_json(rep_dir / "metadata.json") or {}
                 templates = meta.get("templates") or {}
-            last = fs.get("last_rep") or fs.get("last_attempt") or {}
+            # This attempt's own analysis (last_rep can belong to an earlier rep).
+            attempt = fs.get("last_attempt") or fs.get("last_rep") or {}
+            if attempt.get("qualified") is False:
+                reason = attempt.get("reason")
+                not_counted[reason if reason in ("shallow", "too_fast") else "other"] += 1
+                continue
+            last = attempt
             score = fs.get("final_score")
             peak = last.get("peak")
             rom = round(min(100.0, max(0.0, float(peak) * 100))) if isinstance(peak, (int, float)) else None
@@ -162,8 +181,13 @@ def _collect_reps(workout_dir: Path) -> tuple[list[dict], dict[str, dict]]:
                 "time_s": _round(float(fs.get("movement_duration_ms") or 0.0) / 1000.0, 1),
                 "rule_phase": _rep_rule_phase(fs),
                 "penalties": _rep_penalties(fs),
+                # Workout Score inputs: the rep score's two factors and its tracking quality.
+                "final": _number(score),
+                "technique": _number(attempt.get("time_score")),
+                "rom_factor": _number(attempt.get("rom_factor")),
+                "quality": attempt.get("quality"),
             })
-    return reps, templates
+    return reps, templates, not_counted
 
 
 # ------------------------------------------------------------------- aggregation
@@ -255,9 +279,9 @@ def _exercise_report(record: dict, uid: str, sid: str, exercise_id: str) -> dict
     target = plan.get("target") or {}
     if target.get("type") == "time":
         return _timed_exercise_report(record, sid, exercise_id, workout_dir)
-    reps, templates = _collect_reps(workout_dir)
+    reps, templates, not_counted = _collect_reps(workout_dir)
 
-    date, day, start_time = _parse_created(record.get("created_at"))
+    date, day, start_time = _parse_created(record.get("created_at"), record.get("timezone"))
     meta = plan.get("metadata") or {}
     measure = "reps"
     reps_per_set = int(target.get("value") or 0)
@@ -289,6 +313,9 @@ def _exercise_report(record: dict, uid: str, sid: str, exercise_id: str) -> dict
     scores = [r["score"] for r in reps if isinstance(r["score"], (int, float))]
     times = [r["time_s"] for r in reps if isinstance(r["time_s"], (int, float))]
     all_by_rule = _by_rule(reps, templates)
+    rom_rule_id = next((rid for rid, t in templates.items() if (t.get("scoring") or {}).get("role") == "rom"), None)
+    workout = rep_workout_score(reps, planned_total=planned_sets * reps_per_set, by_rule=all_by_rule,
+                                templates=templates, rom_rule_id=rom_rule_id)
 
     return {
         "session_id": sid,
@@ -299,13 +326,18 @@ def _exercise_report(record: dict, uid: str, sid: str, exercise_id: str) -> dict
         "measure": measure,
         "body_part": meta.get("body_part"),
         "training_tag": meta.get("training_tag"),
-        "planned": {"sets": planned_sets, "reps_per_set": reps_per_set, "total": planned_sets * reps_per_set},
+        "planned": {"sets": planned_sets, "reps_per_set": reps_per_set, "total": planned_sets * reps_per_set,
+                    "weight_kg": plan.get("weight_kg")},
         "actual": {"reps_completed": len(reps), "sets_completed": len(set_dirs)},
         "depth_target": depth_target,
         "summary": {
             "avg_form_score": round(sum(scores) / len(scores), 1) if scores else None,
             "total_reps": len(reps),
-            "shallow_reps": sum(1 for r in reps if r["shallow"]),
+            # Full-range reps; shallow ones that counted (exercises that allow them) are in
+            # shallow_reps together with those that did not.
+            "good_reps": sum(1 for r in reps if not r["shallow"]),
+            "shallow_reps": sum(1 for r in reps if r["shallow"]) + not_counted["shallow"],
+            "not_counted": not_counted,
             "best": round(max(scores)) if scores else None,
             "worst": round(min(scores)) if scores else None,
             "avg_rep_time_s": _round(sum(times) / len(times), 1) if times else None,
@@ -328,6 +360,7 @@ def _exercise_report(record: dict, uid: str, sid: str, exercise_id: str) -> dict
             for s in per_set_full
         ],
         "insights": _report_insights(scores, reps, planned_sets * reps_per_set),
+        "workout_score": workout,
     }
 
 
@@ -341,7 +374,7 @@ def _timed_exercise_report(
     plan = record.get("plan") or {}
     target = plan.get("target") or {}
     meta = plan.get("metadata") or {}
-    date, day, start_time = _parse_created(record.get("created_at"))
+    date, day, start_time = _parse_created(record.get("created_at"), record.get("timezone"))
     planned_sets = int(plan.get("sets") or 0)
     target_ms = int(target.get("value_ms") or 0)
     summaries: list[tuple[int, dict]] = [
@@ -392,6 +425,7 @@ def _timed_exercise_report(
             f"Uneven left/right knee travel appeared in {asymmetry_sets} timed "
             f"set{'s' if asymmetry_sets != 1 else ''}."
         )
+    workout = timed_workout_score([summary for _, summary in summaries], planned_sets=planned_sets)
     return {
         "session_id": sid,
         "date": date,
@@ -424,6 +458,7 @@ def _timed_exercise_report(
         },
         "per_set": per_set,
         "insights": insights,
+        "workout_score": workout,
     }
 
 
@@ -455,7 +490,7 @@ def build_session_report(uid: str, sid: str) -> dict | None:
     exercise_id = (record.get("plan") or {}).get("exercise_id")
     if not exercise_id:
         return None
-    return _exercise_report(record, uid, sid, exercise_id)
+    return _with_trend(_exercise_report(record, uid, sid, exercise_id), uid, sid, record, exercise_id)
 
 
 def build_exercise_report(uid: str, sid: str, exercise_id: str) -> dict | None:
@@ -464,7 +499,35 @@ def build_exercise_report(uid: str, sid: str, exercise_id: str) -> dict | None:
         return None
     if (record.get("plan") or {}).get("exercise_id") != exercise_id:
         return None
-    return _exercise_report(record, uid, sid, exercise_id)
+    return _with_trend(_exercise_report(record, uid, sid, exercise_id), uid, sid, record, exercise_id)
+
+
+def _with_trend(report: dict, uid: str, sid: str, record: dict, exercise_id: str) -> dict:
+    """Add the comparison with the last scored session of the same exercise, and the metrics object
+    this exercise would write to the shared activity_sessions table."""
+    workout = report["workout_score"]
+    workout["trend"] = trend(workout["score"], _previous_score(uid, sid, record, exercise_id))
+    report["activity_metrics"] = activity_metrics(report)
+    # The member's own rating of the session, beside the system-generated score, never mixed in.
+    report["activity_rating"] = read_rating(uid, sid)
+    return report
+
+
+def _previous_score(uid: str, sid: str, record: dict, exercise_id: str) -> int | None:
+    """Workout Score of the most recent EARLIER session of this exercise that has one."""
+    this_start = record.get("created_at") or ""
+    earlier = [
+        (other.get("created_at") or "", other_sid, other)
+        for other_sid, other in _iter_session_records(uid)
+        if other_sid != sid
+        and (other.get("plan") or {}).get("exercise_id") == exercise_id
+        and (other.get("created_at") or "") < this_start
+    ]
+    for _, other_sid, other in sorted(earlier, reverse=True):
+        score = _exercise_report(other, uid, other_sid, exercise_id)["workout_score"]["score"]
+        if score is not None:
+            return score
+    return None
 
 
 def build_overview(uid: str, sid: str) -> dict | None:
@@ -474,7 +537,7 @@ def build_overview(uid: str, sid: str) -> dict | None:
     plan = record.get("plan") or {}
     exercise_id = plan.get("exercise_id")
     report = _exercise_report(record, uid, sid, exercise_id) if exercise_id else None
-    date, day, start_time = _parse_created(record.get("created_at"))
+    date, day, start_time = _parse_created(record.get("created_at"), record.get("timezone"))
 
     exercises: list[dict] = []
     session_scores: list[float] = []
@@ -496,6 +559,8 @@ def build_overview(uid: str, sid: str) -> dict | None:
                 "avg_form_score": avg,
                 "planned": report["planned"],
                 "actual": report["actual"],
+                "workout_score": report["workout_score"]["score"],
+                "workout_grade": report["workout_score"]["grade"],
             })
             return {
                 "session_id": sid, "date": date, "day": day, "start_time": start_time,
@@ -505,6 +570,8 @@ def build_overview(uid: str, sid: str) -> dict | None:
                 "total_time_s": _round(total_time, 1) if total_time else None,
                 "exercise_count": len(exercises),
                 "exercises": exercises,
+                "workout_score": _session_workout_score(exercises),
+                "activity_rating": read_rating(uid, sid),
             }
         quality = {"good": 0, "borderline": 0, "poor": 0}
         for r in report["per_rep"]:
@@ -516,19 +583,25 @@ def build_overview(uid: str, sid: str) -> dict | None:
             session_scores.append(avg)
         total_reps += report["summary"]["total_reps"]
         total_time += report["summary"]["total_time_s"] or 0.0
+        not_counted_total = sum((report["summary"].get("not_counted") or {}).values())
         exercises.append({
             "exercise_id": report["exercise_id"],
             "name": report["exercise"],
             "body_part": report["body_part"],
             "training_tag": report["training_tag"],
             "measure": report["measure"],
-            "has_data": report["summary"]["total_reps"] > 0,
+            # Trained, even if no rep counted: a set of only rejected attempts is still shown.
+            "has_data": report["summary"]["total_reps"] + not_counted_total > 0,
             "avg_form_score": avg,
             "planned": {"sets": report["planned"]["sets"], "reps_per_set": report["planned"]["reps_per_set"],
-                        "total": report["planned"]["total"]},
+                        "total": report["planned"]["total"], "weight_kg": report["planned"].get("weight_kg")},
             "actual": report["actual"],
+            "plan_met": report["actual"]["reps_completed"] >= report["planned"]["total"],
             "shallow_reps": report["summary"]["shallow_reps"],
+            "reps_not_counted": not_counted_total,
             "quality": quality,
+            "workout_score": report["workout_score"]["score"],
+            "workout_grade": report["workout_score"]["grade"],
         })
 
     return {
@@ -539,7 +612,14 @@ def build_overview(uid: str, sid: str) -> dict | None:
         "total_time_s": _round(total_time, 1) if total_time else None,
         "exercise_count": len(exercises),
         "exercises": exercises,
+        "workout_score": _session_workout_score(exercises),
+        "activity_rating": read_rating(uid, sid),
     }
+
+
+def _session_workout_score(exercises: list[dict]) -> int | None:
+    scores = [e["workout_score"] for e in exercises if e.get("workout_score") is not None]
+    return round(sum(scores) / len(scores)) if scores else None
 
 
 # ---------------------------------------------------------- cross-session builders
@@ -565,7 +645,7 @@ def list_sessions(uid: str) -> list[dict]:
         if overview is None:
             continue
         plan = record.get("plan") or {}
-        date, day, start_time = _parse_created(record.get("created_at"))
+        date, day, start_time = _parse_created(record.get("created_at"), record.get("timezone"))
         out.append({
             "session_id": sid, "date": date, "day": day, "start_time": start_time,
             "exercise": plan.get("exercise_name") or plan.get("exercise_id") or "",
@@ -578,7 +658,7 @@ def list_sessions(uid: str) -> list[dict]:
 def build_activity(uid: str, year: int) -> list[str]:
     dates: set[str] = set()
     for _sid, record in _iter_session_records(uid):
-        date, _day, _start = _parse_created(record.get("created_at"))
+        date, _day, _start = _parse_created(record.get("created_at"), record.get("timezone"))
         if date.startswith(f"{year:04d}-"):
             dates.add(date)
     return sorted(dates)
@@ -590,12 +670,15 @@ def build_progress(uid: str) -> dict:
         overview = build_overview(uid, sid)
         if overview is None:
             continue
-        date, day, start_time = _parse_created(record.get("created_at"))
+        date, day, start_time = _parse_created(record.get("created_at"), record.get("timezone"))
         sessions.append({
             "session_id": sid, "date": date, "day": day, "start_time": start_time,
             "score": overview["session_score"], "reps": overview["total_reps"],
+            "workout_score": overview["workout_score"],
+            "activity_rating": (overview["activity_rating"] or {}).get("rating"),
             "exercises": [e["name"] for e in overview["exercises"]] or [None],
             "_time": overview["total_time_s"] or 0.0,
+            "_zone": record.get("timezone"),
         })
     sessions.sort(key=lambda s: (s["date"], s["start_time"]))  # oldest -> newest
 
@@ -608,6 +691,8 @@ def build_progress(uid: str) -> dict:
         top = max(scored, key=lambda s: s["score"])
         best = {"score": top["score"], "date": top["date"], "session_id": top["session_id"]}
     total_time = sum(s["_time"] for s in sessions)
+    # "Today" on the person's clock: the zone of their latest session (their phone's).
+    today = now_local(sessions[-1]["_zone"] if sessions else None).date()
 
     return {
         "sessions": [{k: v for k, v in s.items() if not k.startswith("_")} for s in sessions],
@@ -617,38 +702,54 @@ def build_progress(uid: str) -> dict:
         "latest_score": latest_score,
         "delta": delta,
         "best": best,
-        "streak_days": _streak_days({s["date"] for s in sessions}),
-        "this_week": _sessions_this_week(sessions),
+        "streak_days": _streak_days({s["date"] for s in sessions}, today),
+        "best_streak_days": _best_streak_days({s["date"] for s in sessions}),
+        "this_week": _sessions_this_week(sessions, today),
         "total_time_s": round(total_time, 1) if total_time else None,
         "insights": _progress_insights(scored, len(sessions)),
     }
 
 
-def _sessions_this_week(sessions: list[dict]) -> int:
-    iso_year, iso_week, _ = datetime.now().isocalendar()
+def _sessions_this_week(sessions: list[dict], today: date) -> int:
+    """Sessions in today's Monday-to-Sunday week, by their local dates."""
+    iso_year, iso_week, _ = today.isocalendar()
     count = 0
     for s in sessions:
         try:
-            dt = datetime.strptime(s["date"], "%Y-%m-%d")
+            day = datetime.strptime(s["date"], "%Y-%m-%d").date()
         except ValueError:
             continue
-        y, w, _ = dt.isocalendar()
+        y, w, _ = day.isocalendar()
         if (y, w) == (iso_year, iso_week):
             count += 1
     return count
 
 
-def _streak_days(dates: set[str]) -> int:
-    parsed = sorted({datetime.strptime(d, "%Y-%m-%d").date() for d in dates if d})
+def _dates(values: set[str]) -> list[date]:
+    return sorted({datetime.strptime(d, "%Y-%m-%d").date() for d in values if d})
+
+
+def _streak_days(dates: set[str], today: date) -> int:
+    """The current streak: consecutive training days ending today, or yesterday (today's workout
+    may still be ahead). A missed day ends it."""
+    days = set(_dates(dates))
+    cursor = today if today in days else today - timedelta(days=1)
+    streak = 0
+    while cursor in days:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
+def _best_streak_days(dates: set[str]) -> int:
+    """The longest run of consecutive training days ever."""
+    parsed = _dates(dates)
     if not parsed:
         return 0
     streak = best = 1
     for prev, cur in zip(parsed, parsed[1:]):
-        if (cur - prev).days == 1:
-            streak += 1
-            best = max(best, streak)
-        elif cur != prev:
-            streak = 1
+        streak = streak + 1 if (cur - prev).days == 1 else 1
+        best = max(best, streak)
     return best
 
 

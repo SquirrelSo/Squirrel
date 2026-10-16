@@ -1,0 +1,7 @@
+backend/node_modules
+backend/build
+backend/.env
+backend/.env.*
+mobile
+docs
+dev

@@ -63,7 +63,7 @@ export default function CoachApp(
   const poseActive = cameraStarted && state.view !== 'F5'
   const sendActive = state.view === 'F2' || (state.view === 'F3' && !state.isPaused && !state.setOutcome)
 
-  const { videoRef, modelStatus, cameraStatus, permission, errorMsg, retryCamera } = usePose({
+  const { videoRef, modelStatus, cameraStatus, permission, errorMsg, retryCamera, lighting } = usePose({
     onFrame, send, poseActive, sendActive, paused: state.isPaused,
   })
 
@@ -101,6 +101,18 @@ export default function CoachApp(
             />
           )}
           {state.view === 'F3' && <F3_Active s={state} dispatch={dispatchWithClock} elapsedSeconds={clock.elapsedSeconds} onExit={onExit} />}
+
+          {/* Too dark even after low-light enhancement: say so instead of silently missing reps. */}
+          {lighting === 'too_dark' && cameraStarted && !poseError && (
+            <div className="coach-v2__lighting" role="status" aria-live="polite" style={{
+              position: 'absolute', top: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 40,
+              padding: '10px 18px', borderRadius: 12, background: 'rgba(8,10,14,0.88)',
+              border: '1px solid rgba(255,184,0,0.5)', color: '#fff', fontSize: 15, fontWeight: 600,
+              pointerEvents: 'none',
+            }}>
+              It&apos;s too dark for the camera — turn on a light or face a window.
+            </div>
+          )}
 
           {showExit && (
             <button type="button" onClick={onExit} className="coach-v2__exit">

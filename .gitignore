@@ -1,0 +1,13 @@
+# Combined stack (docker-compose.yml). Each module keeps its own .gitignore as well.
+.env
+deploy/certs/*
+!deploy/certs/.gitkeep
+
+# Dependencies — never commit these
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+build/
+.expo/

@@ -1,0 +1,202 @@
+# Push-up rule templates. Camera view: SIDE-ON (catalog.yaml records view: side).
+#
+# WHY SIDE-ON, for both live signals:
+#   * elbow bend (push-up depth) — front-on, the forearm points at the camera and the projected
+#     shoulder-elbow-wrist angle collapses, so depth cannot be separated from a shallow rep. This is
+#     the same foreshortening that pushed bicep_curl's ROM off elbow angle and onto wrist height;
+#     a push-up has no equivalent vertical travel to fall back on, so it needs the profile view.
+#   * body line (sagging / piked hips) — a sagittal-plane deviation, hidden behind the torso front-on.
+#
+# THRESHOLD PROVENANCE — READ BEFORE PROMOTING ANY OF THESE TO `ready`.
+# Every number below is `development`, and none of them is capture-derived in the sense the other
+# exercises mean it. They were derived geometrically and validated against synthetic skeletons and a
+# single real still frame while building the standalone pose-recognition service this rule set was
+# ported from (see pose_backend/ at the repository root; the mapping is recorded in each rule module).
+# That is weaker evidence than bicep_curl's labelled rig sessions. What each number needs to become
+# `ready` is stated at the threshold itself.
+schema_version: 1
+
+scoring:
+  version: 1
+  min_active_ms: 250
+  min_active_frames: 5
+  max_frame_delta_ms: 100
+  cue_min_display_ms: 800
+
+templates:
+  - id: body_line
+    rank: 1
+    tier: high
+    tuning_status: development
+    fault_label: "Body line"
+    active_phases: [descent, bottom, ascent]
+    required_keypoints:
+      [left_shoulder, right_shoulder, left_hip, right_hip, left_ankle, right_ankle]
+    issue: "The hips drop below or pike above the shoulder-to-ankle line."
+    cue: "Squeeze your glutes and hold one straight line."
+    coaching: "Your hips drifted out of line during the set. Brace your abs and squeeze your glutes so your shoulders, hips and ankles stay in one straight line — that is what keeps the work in your chest and arms instead of your lower back."
+    # Degeneracy floor, not tuning: below this shoulder-to-ankle span the normalized offset is
+    # dominated by landmark noise.
+    min_body_span_px: 120
+    policy:
+      # Signed hip offset from the shoulder-to-ankle line, normalized by that span, measured
+      # relative to the captured plank. Positive = hips toward the floor (sag), negative = hips away
+      # from it (pike). Baseline-relative for the same reason as lateral_torso_lean: it removes
+      # camera roll and a person's natural plank shape. plank_ready is what stops a sagging BASELINE
+      # from being accepted as that person's reference.
+      mode: baseline_relative_offset
+      ranges:
+        # PROVISIONAL — geometric derivation only. 0.035 of the body span is ~4 cm of hip travel on
+        # a 180 cm frame, which is about where a sag becomes visible to a coach; 0.055 is where it is
+        # unmistakable. Confirm both edges against a rig capture of deliberate sag and pike reps
+        # before promoting to `ready`.
+        - range: {lt: -0.055}
+          state: not_ok
+          side: pike
+          skeleton_color: red
+        - range: {gte: -0.055, lt: -0.035}
+          state: warning
+          side: pike
+          skeleton_color: green
+        - range: {gte: -0.035, lte: 0.035}
+          state: safe
+          side: null
+          skeleton_color: green
+        - range: {gt: 0.035, lte: 0.055}
+          state: warning
+          side: sag
+          skeleton_color: green
+        - range: {gt: 0.055}
+          state: not_ok
+          side: sag
+          skeleton_color: red
+    scoring:
+      role: penalty
+      weight: 0.50
+      confirmed_fault:
+        min_not_ok_ms: 250
+        minimum_penalty: 0.30
+      evidence_phases: [descent, bottom, ascent]
+
+  - id: pushup_depth
+    rank: 2
+    tier: high
+    tuning_status: development
+    fault_label: "Short depth"
+    active_phases: [descent, bottom, ascent]
+    required_keypoints:
+      [left_shoulder, right_shoulder, left_elbow, right_elbow, left_wrist, right_wrist]
+    issue: "The push-up does not reach the intended elbow bend."
+    cue: "Lower until your elbows bend to about 90 degrees."
+    coaching: "You are cutting the range short. Lower your chest until your elbows reach about a right angle, pause for a beat, then press away — the bottom half of the rep is where the chest and triceps actually work."
+    # Progress 1.0 means the elbow has closed from its captured extended angle to this target.
+    # 90 degrees is the standard coaching definition of push-up depth.
+    target_elbow_angle_deg: 90.0
+    # PROVISIONAL — geometric derivation only. On a typical 170 deg captured baseline this gate
+    # credits a full rep at roughly 98 deg of elbow bend, i.e. "close enough to a right angle".
+    # Confirm on a rig capture of coach-judged full and shallow reps before promoting to `ready`.
+    full_rom_gate: 0.90
+    # Degeneracy floors, not tuning. A baseline captured with bent arms has no usable zero point,
+    # and a short upper arm in pixels means the person is too far away to measure.
+    min_baseline_elbow_angle_deg: 140.0
+    min_upper_arm_px: 40.0
+    shallow_next_rep_cue_ms: 500
+    scoring:
+      role: rom
+      mode: rom
+      rom_floor: 0.30
+      evidence_phases: [descent, bottom, ascent]
+
+  - id: side_view_orientation
+    rank: 3
+    tier: medium
+    tuning_status: development
+    fault_label: "Camera view"
+    # Monitored in every phase, including the lifecycle phases: drifting front-on between reps is
+    # exactly when it happens, and the user needs telling before the next rep, not after it.
+    active_phases: [setup, descent, bottom, ascent, reset]
+    required_keypoints: [left_shoulder, right_shoulder, left_hip, right_hip]
+    issue: "The camera is seeing the body front-on instead of from the side."
+    cue: "Turn your side to the camera."
+    # No reading (neither side's shoulder and hip tracked) is not "front-on": say what is missing.
+    unavailable_cue: "Keep your shoulder and hip in the picture, side-on to the camera."
+    coaching: "Part of the set was recorded front-on. Push-up depth and body alignment can only be measured from the side, so set the camera at your side, level with your torso, with your whole body in frame."
+    policy:
+      # Seen from the side, the left and right shoulders sit almost on top of each other in the
+      # image, so their horizontal separation is small relative to torso length; front-on it is close
+      # to full shoulder width. Dividing by torso length makes the reading independent of how far
+      # away the person is. The signal is the WORSE of the shoulder and hip ratios.
+      mode: torso_normalized_spread
+      ranges:
+        # PROVISIONAL — ported from the standalone service, where the equivalent constants were
+        # 0.38 (shoulders) and 0.34 (hips) validated on synthetic skeletons plus one real frame
+        # (which read 0.66 front-on and was correctly rejected). Consolidating two constants into one
+        # signal applies the tighter hip bound to both, which is deliberate: side-on readings sit
+        # near 0.10, so there is no cost to the stricter edge. Confirm on a rig capture of a user
+        # rotating from profile to front-on before promoting to `ready`.
+        - range: {lte: 0.34}
+          state: safe
+          side: null
+          skeleton_color: green
+        - range: {gt: 0.34, lte: 0.42}
+          state: warning
+          side: null
+          skeleton_color: green
+        - range: {gt: 0.42}
+          state: not_ok
+          side: null
+          skeleton_color: red
+    # Frame hysteresis, so one noisy frame neither prompts a reposition nor clears a real one.
+    # Ported verbatim from the standalone service (3 frames to flag, 2 to clear).
+    confirm_frames: 3
+    clear_frames: 2
+    # Degeneracy floor: below this torso length the ratios are meaningless.
+    min_torso_length_px: 60.0
+    # A front-on view only cues ("Turn your side to the camera"); it never pauses counting. Pausing
+    # the rep machine on this check (a provisional threshold) stopped real push-ups from counting.
+    invalidates_measurement: false
+    scoring:
+      # It still never SCORES: a wrong camera angle is not a fault in the user's form. It cues,
+      # it pauses, it contributes nothing to any rep score.
+      role: monitor
+
+  - id: plank_ready
+    rank: 4
+    tier: pre_check
+    tuning_status: development
+    fault_label: "Start in a plank"
+    active_phases: [setup]
+    required_keypoints:
+      [
+        left_shoulder,
+        right_shoulder,
+        left_elbow,
+        right_elbow,
+        left_wrist,
+        right_wrist,
+        left_hip,
+        right_hip,
+        left_ankle,
+        right_ankle,
+      ]
+    issue: "The baseline must be captured at the top of a push-up: arms extended, body straight, side-on."
+    cue: "Get into the top of a push-up with straight arms and a straight body."
+    # Setup says WHICH part is wrong (field test: the camera was never accepted and nothing said
+    # why). Keyed by reason_id; `unavailable_cue` is for a frame where no side can be read at all.
+    reason_cues:
+      not_in_plank_position: "Get down into a plank: hands under your shoulders, body level."
+      arms_not_extended: "Straighten your arms at the top of the push-up."
+      body_not_straight: "Keep your body in one straight line: hips level with your shoulders."
+    unavailable_cue: "Keep your whole side in the picture: shoulder, arm, hip and ankle."
+    setup_policy:
+      # Absolute checks (unlike the live body line, which is baseline-relative) — this IS the check
+      # that decides whether a baseline may become someone's reference.
+      # PROVISIONAL: 150 deg is a deliberately forgiving read of "arms extended" (wrist and elbow
+      # landmarks are noisier than the knee landmarks squat's 160 deg equivalent uses).
+      min_elbow_extension_deg: 150.0
+      # Straight-enough body at capture time, on the same normalized-offset scale as the live rule.
+      max_body_line_offset: 0.10
+      # Ported from the standalone service (PUSHUP_TORSO_MAX_DEG_FROM_HORIZONTAL = 35): in a plank
+      # the shoulder-to-hip line is near horizontal, which is also what separates a push-up from a
+      # standing exercise.
+      max_torso_deg_from_horizontal: 45.0

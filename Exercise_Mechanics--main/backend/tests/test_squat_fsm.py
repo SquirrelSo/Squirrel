@@ -50,10 +50,10 @@ _SHALLOW_REP = [
 
 _INVALID_ATTEMPT = [
     (0.00, 0),
-    (0.15, 100),
-    (0.20, 200),
-    (0.15, 300),
-    (0.12, 400),
+    (0.28, 100),
+    (0.35, 200),
+    (0.30, 300),
+    (0.27, 400),
     (0.05, 500),
 ]
 
@@ -127,7 +127,7 @@ def test_micro_movement_is_invalid_attempt_and_does_not_advance_set():
 def test_exact_min_rep_peak_is_qualified_and_shallow():
     state = _drive(
         _fsm(),
-        [(0.0, 0), (0.15, 100), (0.30, 200), (0.20, 300), (0.15, 400), (0.05, 500)],
+        [(0.0, 0), (0.30, 100), (0.40, 200), (0.35, 300), (0.30, 400), (0.05, 500)],
     )
     assert state.qualified_count == 1
     assert state.shallow_count == 1
@@ -172,25 +172,19 @@ def test_completion_edges_exist_on_only_the_return_frame():
 def test_reset_dwell_requires_a_fresh_standing_frame_to_rearm():
     fsm = _fsm()
     _drive(fsm, _FULL_REP)
-    assert fsm.update(0.0, 900).phase == RESET
-    assert fsm.update(0.0, 1000).phase == RESET
-    assert fsm.update(0.0, 1100).phase == RESET
-    assert fsm.update(0.0, 1200).phase == RESET
-    assert fsm.update(0.0, 1300).phase == SETUP
-    assert fsm.update(0.4, 1400).phase == DESCENT
+    assert fsm.update(0.0, 850).phase == RESET
+    assert fsm.update(0.0, 900).phase == SETUP
+    assert fsm.update(0.4, 1000).phase == DESCENT
 
 
 def test_tracking_loss_during_reset_restarts_dwell_before_cycle_completion():
     fsm = _fsm()
     _drive(fsm, _FULL_REP)
 
-    assert fsm.update(None, 900).phase == RESET
-    assert fsm.update(0.0, 1000).rep_cycle_completed is False
-    assert fsm.update(0.0, 1100).rep_cycle_completed is False
-    assert fsm.update(0.0, 1200).rep_cycle_completed is False
-    assert fsm.update(0.0, 1300).rep_cycle_completed is False
-    assert fsm.update(0.0, 1400).rep_cycle_completed is False
-    completed = fsm.update(0.0, 1500)
+    assert fsm.update(None, 850).phase == RESET
+    assert fsm.update(0.0, 900).rep_cycle_completed is False
+    assert fsm.update(0.0, 950).rep_cycle_completed is False
+    completed = fsm.update(0.0, 1000)
 
     assert completed.phase == SETUP
     assert completed.rep_cycle_completed is True
@@ -276,7 +270,7 @@ def test_short_incompatible_gap_discards_partial_attempt():
 def test_long_gap_discards_even_a_full_depth_partial_attempt():
     fsm = _fsm()
     _drive(fsm, [(0.0, 0), (0.4, 30), (0.9, 60)])
-    state = fsm.update(0.7, 200)
+    state = fsm.update(0.7, 1100)   # over the configured max_tracking_gap_ms
 
     assert state.phase == SETUP
     assert state.attempt_discarded is True

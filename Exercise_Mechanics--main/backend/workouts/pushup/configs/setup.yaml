@@ -1,0 +1,38 @@
+# Push-up setup transport/capture configuration. Which templates run is defined in switches.yaml.
+# The combined gate is the same shape as squat and curl: keypoint visibility + a pre-check held
+# stable, then a timed baseline capture.
+#
+# The baseline is captured in the TOP of the push-up (a held plank, arms extended). That position
+# is what every live signal is measured against: the captured elbow angle is push-up depth's zero
+# point, and the captured shoulder-hip-ankle geometry is the body line's reference.
+#
+# KEYPOINT GATE AND THE SIDE-ON VIEW. Side-on, the far arm, hip and ankle are hidden behind the
+# near ones and the pose model reports them below the confidence floor. Requiring both sides here
+# (as this file did) refused exactly the view push-ups are measured from: in the field the camera
+# angle was never accepted. So the gate needs ONE whole side, whichever the camera sees; the live
+# rules already read the better-tracked side (kinematics.usable_side). The far side's predicted
+# positions are still kept in the baseline; stillness is measured on the side in view.
+schema_version: 1
+exercise: pushup
+
+keypoints: []
+either_side: [shoulder, elbow, wrist, hip, ankle]
+
+pre_check:
+  enabled: true
+  stable_ms: 2000
+
+baseline:
+  required: true
+  file: pushup_baseline_keypoints.json
+  capture:
+    # Holding the top of a plank still for 3s is achievable; the stillness bound is the same 8px
+    # per-joint standard deviation the other exercises use.
+    duration_ms: 3000
+    min_valid_samples: 45
+    min_valid_coverage: 0.80
+    invalid_pause_ms: 250
+    invalid_reset_ms: 1000
+    # Stillness as a fraction of the person's torso length (training/baseline.py), so it holds at
+    # any distance. Real footage: holding still 0.06-0.085, still stepping into place 0.22+.
+    max_joint_stddev_torso: 0.12

@@ -100,6 +100,8 @@ class HighKneeSetupAdapter:
             and isfinite(quality.max_joint_stddev_px)
             and quality.valid_duration_ms >= 0
             and quality.max_joint_stddev_px >= 0
+            and quality.max_joint_stddev_rel is not None
+            and isfinite(quality.max_joint_stddev_rel)
             and isclose(
                 quality.valid_coverage,
                 expected_coverage,
@@ -112,7 +114,7 @@ class HighKneeSetupAdapter:
             and quality.valid_samples >= int(capture["min_valid_samples"])
             and quality.valid_coverage >= float(capture["min_valid_coverage"])
             and quality.valid_duration_ms >= float(capture["duration_ms"])
-            and quality.max_joint_stddev_px <= float(capture["max_joint_stddev_px"])
+            and quality.max_joint_stddev_rel <= float(capture["max_joint_stddev_torso"])
         )
         return ConditionResult(
             "baseline_quality",
@@ -124,6 +126,7 @@ class HighKneeSetupAdapter:
                 "valid_coverage": quality.valid_coverage,
                 "valid_duration_ms": quality.valid_duration_ms,
                 "max_joint_stddev_px": quality.max_joint_stddev_px,
+                "max_joint_stddev_torso": quality.max_joint_stddev_rel,
             },
         )
 

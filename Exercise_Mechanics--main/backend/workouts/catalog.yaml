@@ -5,6 +5,8 @@
 # visibility gate are written for its view.
 #
 # Prototype 1 = 5 exercises. All front-view EXCEPT plank (side-view).
+# Push-up joins as the first ENABLED side-view exercise: elbow bend and hip alignment are both
+# sagittal-plane quantities and cannot be measured front-on (see workouts/pushup/configs/templates.yaml).
 # Only `enabled` exercises may create a session. Planned entries remain discoverable metadata and
 # do not require an implementation directory until their delivery stage.
 
@@ -17,6 +19,9 @@ exercises:
     status: enabled
   high_knee:
     view: front
+    status: enabled
+  pushup:
+    view: side
     status: enabled
   lunge:
     view: front

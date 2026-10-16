@@ -3,3 +3,9 @@ uvicorn[standard]==0.48.0
 pytest==9.0.3
 pyyaml==6.0.3
 eval_type_backport==0.2.2
+psycopg[binary]==3.2.13
+psycopg-pool==3.2.6
+# RS256 token signing (auth/tokens.py)
+cryptography==50.0.1
+segno==1.6.6
+tzdata==2026.4

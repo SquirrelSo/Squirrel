@@ -1,0 +1,54 @@
+# Push-up descend-first repetition model. Progress is normalized elbow flexion: 0 at the baseline
+# top (arms extended in the plank), growing to a peak at the bottom of the rep. Same lifecycle
+# vocabulary as squat (setup → descent → bottom → ascent → reset); the engine's RepFSM derives its
+# roles from this transition graph, so no engine change was needed to add this exercise.
+#
+# CAMERA VIEW: side-on. See templates.yaml and rules/ for why every measurement requires it.
+schema_version: 2
+movement_type: reps
+
+phases: [setup, descent, bottom, ascent, reset]
+initial_phase: setup
+
+transitions:
+  - {from: setup, to: setup, when: tracking_recovery_failed, action: reset_attempt}
+  - {from: setup, to: descent, when: descent_started}
+
+  - {from: descent, to: setup, when: tracking_recovery_failed, action: discard_attempt, emit: attempt_discarded}
+  - {from: descent, to: setup, when: phase_stale, action: discard_attempt, emit: attempt_discarded}
+  - {from: descent, to: bottom, when: full_rom_reached}
+  - {from: descent, to: ascent, when: turnaround_confirmed}
+
+  - {from: bottom, to: setup, when: tracking_recovery_failed, action: discard_attempt, emit: attempt_discarded}
+  - {from: bottom, to: setup, when: phase_stale, action: discard_attempt, emit: attempt_discarded}
+  - {from: bottom, to: ascent, when: turnaround_confirmed}
+
+  - {from: ascent, to: setup, when: tracking_recovery_failed, action: discard_attempt, emit: attempt_discarded}
+  - {from: ascent, to: setup, when: phase_stale, action: discard_attempt, emit: attempt_discarded}
+  - {from: ascent, to: reset, when: top_returned, action: complete_attempt, emit: attempt_completed}
+
+  - {from: reset, to: reset, when: tracking_recovery_failed, action: reset_attempt}
+  - {from: reset, to: setup, when: reset_dwell_elapsed, action: reset_attempt, emit: rep_cycle_completed}
+
+# Progress policy. Must satisfy 0 <= top_return <= descent_trigger < min_rep_peak.
+# Progress is 0 at the captured top and 1 at a 90 deg elbow. A rep: the elbows bend past
+# min_rep_peak (~32 deg off a 170 deg lockout), then straighten back within top_return (~20 deg) of
+# the top. The generous top band lets people press up without locking out fully; the short dwell
+# lets the next rep start straight away.
+descent_trigger: 0.25
+top_return: 0.25
+min_rep_peak: 0.40
+turnaround_ms: 150
+reset_dwell_ms: 100
+stale_phase_ms: 10000
+# Slow cameras (under 10 frames a second) and a joint hidden for a moment must not throw the rep
+# away; only a longer dropout does.
+max_tracking_gap_ms: 1000
+
+# What a rep must be to count toward the set (engine/rep_fsm.py). A rep short of the full-ROM gate
+# still counts, with a warning said at once, and earns no XP (only full reps are good_reps). None
+# faster than min_rep_ms counts, from leaving the resting band to returning to it: quicker than that
+# is bouncing, not a controlled rep.
+count_shallow: true
+min_rep_ms: 1000
+too_fast_cue: "Slower: that push-up was too fast to count."

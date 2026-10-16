@@ -2,7 +2,7 @@
 
 This is one biomechanical rule kernel (template id `depth`, "Short depth"), built to stand
 completely on its own — no rep FSM, no phase machine, no rep counting. It answers two
-questions from a single frame's hip + knee landmarks:
+questions from a single frame's hip landmarks (the live knees are optional):
 
     1. HOW DEEP is the squat right now?      → a normalized `depth_ratio` signal
     2. Is that deep enough for a FULL rep?    → the `is_full_depth()` gate
@@ -35,6 +35,12 @@ For squat (an FSM-1 / descend-first movement) `depth_ratio` doubles as the rep m
 progress signal (0 at rest → grows to a peak at the bottom). A different exercise would
 supply its own signal kernel; this one stays squat-specific but FSM-agnostic.
 
+Only the hips are required live. When the camera is close, the knees sit at the bottom edge of
+the image as the person squats and lose confidence; depth must not depend on them. The signal is
+deliberately just the hip drop: guards built from knee or shin lengths in the image read a real
+front-view squat as straight legs (the knees come toward the camera and drop in the image) and
+stopped every rep from counting.
+
 Thresholds are NOT hardcoded here. ``full_rom_gate`` is passed verbatim from the squat template
 and is the sole credit boundary; depth deliberately has no hysteresis.
 """
@@ -47,7 +53,8 @@ from backend.core.keypoints import usable_xy
 
 RULE_ID = "depth"
 # Anatomical inputs are stable kernel metadata; thresholds remain in configuration.
-REQUIRED_KEYPOINTS = ("left_hip", "right_hip", "left_knee", "right_knee")
+REQUIRED_KEYPOINTS = ("left_hip", "right_hip")
+KNEE_KEYPOINTS = ("left_knee", "right_knee")   # optional: only for hip_below_knee
 
 
 @dataclass(frozen=True)
@@ -56,7 +63,8 @@ class DepthReading:
     compares peaks against the gate, so precision matters); presentation rounding is a caller
     concern."""
     depth_ratio:    float          # 0.0 standing → 1.0 hip at standing-knee height (>1 deeper)
-    hip_below_knee: bool           # live ATG indicator (hip below the CURRENT knee) — informational only
+    hip_below_knee: bool | None    # live ATG indicator (hip below the CURRENT knee), None without
+                                   # usable knees — informational only
     full_rom_gate:  float          # the sole full-ROM boundary from exercise config
     full_depth:     bool           # did THIS frame reach the gate (depth_ratio ≥ gate)
     shortfall:      float | None   # distance below the gate; None when at/over the gate
@@ -107,9 +115,9 @@ class DepthRule:
 
     # ------------------------------------------------------------------
     def read(self, keypoints: dict) -> DepthReading | None:
-        """Compute this frame's depth from the live hip + knee landmarks.
+        """Compute this frame's depth from the live hip landmarks.
 
-        Returns None when any required hip/knee landmark is missing or below CONFIDENCE_MIN —
+        Returns None when either hip landmark is missing or below CONFIDENCE_MIN —
         a low-confidence joint carries ±jitter that would corrupt the signal, so the caller
         must treat this frame as "no reading" (never advance a rep or score on partial data)."""
         pts = usable_xy(keypoints, REQUIRED_KEYPOINTS)
@@ -117,12 +125,16 @@ class DepthRule:
             return None
 
         hip_mid_y = (pts["left_hip"][1] + pts["right_hip"][1]) / 2.0
-        knee_mid_y = (pts["left_knee"][1] + pts["right_knee"][1]) / 2.0
         depth = (hip_mid_y - self._baseline_hip_y) / self._rom
+        knees = usable_xy(keypoints, KNEE_KEYPOINTS)
+        hip_below_knee = (
+            None if knees is None
+            else hip_mid_y > (knees["left_knee"][1] + knees["right_knee"][1]) / 2.0
+        )
 
         return DepthReading(
             depth_ratio=depth,
-            hip_below_knee=hip_mid_y > knee_mid_y,
+            hip_below_knee=hip_below_knee,
             full_rom_gate=self._full_rom_gate,
             full_depth=self.is_full_depth(depth),
             shortfall=(round(self._full_rom_gate - depth, 3) if depth < self._full_rom_gate else None),

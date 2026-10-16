@@ -78,3 +78,20 @@ def missing_keypoints(
         if not (isinstance(v, Real) and v >= min_v):
             out.append(name)
     return out
+
+
+def missing_either_side(
+    keypoints: dict,
+    bases: tuple[str, ...],
+    min_v: float = CONFIDENCE_MIN,
+) -> list[str]:
+    """For joints needed on ONE side only (a side-on exercise, where the far side is hidden behind
+    the near one): empty when either side's whole chain (``left_<base>`` / ``right_<base>`` for every
+    base) is visible, else the missing joints of the side closer to complete (left on a tie)."""
+    if not bases:
+        return []
+    missing = [
+        missing_keypoints(keypoints, tuple(f"{side}_{base}" for base in bases), min_v)
+        for side in ("left", "right")
+    ]
+    return min(missing, key=len)

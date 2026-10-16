@@ -39,6 +39,10 @@ const CATALOG: Category[] = [
     exercises: [
       { key: 'bicep_curl_single', slug: 'bicep_curl', variant: 'single', name: 'Single Arm Bicep Curl', type: 'Strength', measure: 'reps', live: false, image: '/ex-bicep-curl-single.jpg' },
       { key: 'bicep_curl_double', slug: 'bicep_curl', variant: 'double', name: 'Double Arm Bicep Curl', type: 'Strength', measure: 'reps', live: false, image: '/ex-bicep-curl-double.jpg' },
+      // Push-up is coached from the SIDE, unlike every other card here — the backend catalog
+      // carries that (view: side) and the setup flow refuses a front-on camera, so nothing extra
+      // is needed on this side beyond offering the exercise.
+      { key: 'pushup', name: 'Push-up', type: 'Strength', measure: 'reps', live: true },
     ],
   },
   {
@@ -116,7 +120,7 @@ const PROGRAMS: Program[] = [
     blurb: 'Straight sets with full recovery — finish every set of one exercise before the next.',
     mode: 'sets', color: '#8C7BFF',
     icon: <Ico size={26} paths={<><path d="M6.5 6.5v11M3.5 9v6M17.5 6.5v11M20.5 9v6M6.5 12h11" /></>} />,
-    recommended: ['squat', 'lunges', 'bicep_curl_single', 'plank'],
+    recommended: ['squat', 'lunges', 'pushup', 'bicep_curl_single', 'plank'],
     discouraged: { high_knee: 'Skip for strength — save your energy for the lifts.' },
   },
   {
@@ -124,7 +128,7 @@ const PROGRAMS: Program[] = [
     blurb: 'Circuit — move through every exercise back-to-back, rest, then repeat for a few rounds.',
     mode: 'rounds', color: '#2DD4BF',
     icon: <Ico size={26} paths={<><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" /><path d="M3 21v-5h5" /></>} />,
-    recommended: ['squat', 'bicep_curl_single', 'lunges', 'high_knee', 'plank'],
+    recommended: ['squat', 'bicep_curl_single', 'pushup', 'lunges', 'high_knee', 'plank'],
     discouraged: {},
   },
   {

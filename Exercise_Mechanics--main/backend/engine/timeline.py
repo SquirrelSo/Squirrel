@@ -7,6 +7,8 @@ from math import isfinite
 from numbers import Real
 from typing import Mapping
 
+from backend.engine.cadence import FrameGapBoundary
+
 
 @dataclass(frozen=True)
 class TimelineFrame:
@@ -143,12 +145,16 @@ class RepTimeline:
         active_phases: Mapping[str, set[str] | frozenset[str] | tuple[str, ...] | list[str]],
         *,
         max_frame_delta_ms: float,
+        frame_cadence: Mapping | None = None,
     ) -> None:
         if not isinstance(max_frame_delta_ms, Real) or isinstance(max_frame_delta_ms, bool):
             raise ValueError("max_frame_delta_ms must be numeric")
         if not isfinite(float(max_frame_delta_ms)) or float(max_frame_delta_ms) <= 0:
             raise ValueError("max_frame_delta_ms must be finite and positive")
         self._max_delta = float(max_frame_delta_ms)
+        # Cadence-aware boundary: identical to max_frame_delta_ms at ~30 fps, scaled with the
+        # observed frame interval on slow cameras so normal frames are not read as gaps.
+        self._gap_boundary = FrameGapBoundary(self._max_delta, frame_cadence)
         self._active_phases: dict[str, frozenset[str]] = {}
         for rule_id, phases in active_phases.items():
             if not isinstance(rule_id, str) or not rule_id.strip():
@@ -172,6 +178,10 @@ class RepTimeline:
         """Accept a frame, optionally cutting the completed attempt at this timestamp."""
         current = self._normalize_frame(frame)
         previous = self._previous
+        if previous is None or current.t_ms >= previous.t_ms:
+            max_delta = self._gap_boundary.observe(current.t_ms)
+        else:
+            max_delta = self._gap_boundary.limit_ms
         if previous is None:
             self._previous = current
             self._started_at_ms = current.t_ms
@@ -187,8 +197,8 @@ class RepTimeline:
         if raw_delta < 0:
             return TimelineUpdate(False, True, False, raw_delta, 0.0, 0.0, None)
 
-        effective_delta = min(raw_delta, self._max_delta)
-        tracking_gap = raw_delta > self._max_delta
+        effective_delta = min(raw_delta, max_delta)
+        tracking_gap = raw_delta > max_delta
         credited_delta = 0.0 if tracking_gap or not previous.tracking else effective_delta
         if tracking_gap:
             self._tracking_gaps += 1

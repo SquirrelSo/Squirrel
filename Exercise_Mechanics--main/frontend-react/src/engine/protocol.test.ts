@@ -56,7 +56,7 @@ const reliableCoverage = {
 
 function trainData(): WSRepTrain {
   return {
-    tracking: { available: true, unavailable_rule_ids: [] },
+    tracking: { available: true, unavailable_rule_ids: [], invalidated_by: [] },
     phase: 'reset',
     counters: { attempts: 1, qualified: 1, full_rom: 1, shallow: 0, invalid: 0 },
     rom: {

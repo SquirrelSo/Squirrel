@@ -98,6 +98,7 @@ class RepScorer:
         return RepTimeline(
             active_phases,
             max_frame_delta_ms=float(self._config.scoring["max_frame_delta_ms"]),
+            frame_cadence=self._config.scoring.get("frame_cadence"),
         )
 
     def score(self, rep: CompletedRep) -> RepScore:

@@ -121,6 +121,7 @@ def test_create_session_rest_persists_normalized_atomic_record(user_id):
         "exercise_id": "squat",
         "exercise_name": "Squat",
         "variant": None,
+        "weight_kg": None,
         "sets": 3,
         "target": {"type": "reps", "value": 8},
         "rest_seconds": 60,
@@ -242,3 +243,20 @@ def test_websocket_identity_failure_is_explicit():
     assert asyncio.run(_session_access(websocket)) is None  # type: ignore[arg-type]
     assert websocket.messages == [{"error": {"code": "invalid_user", "detail": "a valid user_id is required"}}]
     assert websocket.closed == (1008, "invalid_user")
+
+
+def test_the_phones_time_zone_is_kept_and_an_unknown_one_ignored(user_id):
+    for zone, stored in (("Asia/Kolkata", "Asia/Kolkata"), ("Not/AZone", None), ("../etc", None)):
+        status, response = _post(_app(), f"/api/users/{user_id}/sessions", {**_payload(), "timezone": zone})
+        assert status == 201
+        assert read_session_record(user_id, response["session_id"]).get("timezone") == stored
+
+
+def test_an_optional_dumbbell_weight_is_recorded_with_the_plan(user_id):
+    body = _payload("bicep_curl")
+    body["exercises"][0]["weight_kg"] = 5
+    status, response = _post(_app(), f"/api/users/{user_id}/sessions", body)
+    assert status == 201 and response["weight_kg"] == 5
+    assert read_session_record(user_id, response["session_id"])["plan"]["weight_kg"] == 5
+    body["exercises"][0]["weight_kg"] = 0
+    assert _post(_app(), f"/api/users/{user_id}/sessions", body)[0] == 422
