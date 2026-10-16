@@ -10,7 +10,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "in.squirrelsocial.app"
     },
-        "android": {
+    "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0C0C0C"
@@ -31,12 +31,22 @@
           "action": "VIEW",
           "autoVerify": true,
           "data": [
-            { "scheme": "https", "host": "squirrelsocial.life" },
-            { "scheme": "https", "host": "squirrel-amber-sigma-virid.vercel.app" }
+            {
+              "scheme": "https",
+              "host": "squirrelsocial.life"
+            },
+            {
+              "scheme": "https",
+              "host": "squirrel-amber-sigma-virid.vercel.app"
+            }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
-      ]
+      ],
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/favicon.png",
