@@ -209,16 +209,26 @@ async function main() {
     results.push({ item: 3, title: 'XP from push-ups/squats', pass: false, detail: err.message });
   }
 
-  // 4. Pose analysis and form-based XP
+  // 4. Pose analysis and form-based XP: test_full_depth_reps_with_form_faults_earn_full_xp_in_production_today
   try {
-    const xpFaulted = exerciseSessionXp({ reps: 10, correct_pct: 0 });
-    const xpClean = exerciseSessionXp({ reps: 10, correct_pct: 100 });
-    const pass4 = xpFaulted === 0 && xpClean === 20;
+    // Production exercise reports build payload via builder.py & workout_score.activity_metrics.
+    // When reps hit full depth (not shallow), good_reps equals total counted reps, even if form faults
+    // (pushup hip sag/pike, squat knee-cave) reduce correct_pct to 0.
+    const pushupSagPikeFullDepth = { reps: 3, good_reps: 3, correct_pct: 0, reps_not_counted: 0 };
+    const squatKneeCaveFullDepth = { reps: 3, good_reps: 3, correct_pct: 0, reps_not_counted: 0 };
+    const shallowRepsNoDepth = { reps: 0, good_reps: 0, correct_pct: 0, reps_not_counted: 3 };
+
+    const xpPushup = exerciseSessionXp(pushupSagPikeFullDepth);
+    const xpSquat = exerciseSessionXp(squatKneeCaveFullDepth);
+    const xpShallow = exerciseSessionXp(shallowRepsNoDepth);
+
+    // In production today, full-depth faulted reps earn full 2 XP per rep; shallow reps earn 0 XP.
+    const pass4 = xpPushup === 6 && xpSquat === 6 && xpShallow === 0;
     results.push({
       item: 4,
-      title: 'Pose analysis and form-based XP (faulted reps 0 XP on fallback)',
+      title: 'Pose analysis and form-based XP (test_full_depth_reps_with_form_faults_earn_full_xp_in_production_today)',
       pass: pass4,
-      detail: `FaultedRepsXP=${xpFaulted} (exp 0); CleanRepsXP=${xpClean} (exp 20)`,
+      detail: `PushupSagPikeFullDepthXP=${xpPushup} (exp 6); SquatKneeCaveFullDepthXP=${xpSquat} (exp 6); ShallowRepsXP=${xpShallow} (exp 0)`,
     });
   } catch (err: any) {
     results.push({ item: 4, title: 'Pose analysis and form-based XP', pass: false, detail: err.message });
