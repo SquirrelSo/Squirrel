@@ -320,7 +320,7 @@ export type ActivityZones = {
 };
 
 export type ActivityPoint = { lat: number; lng: number; recorded_at: string; accuracy_m: number };
-export type ActivitySubmit = { type: ActivityType; started_at: string; ended_at: string; points: ActivityPoint[] };
+export type ActivitySubmit = { type: ActivityType; started_at: string; ended_at: string; points: ActivityPoint[]; idempotency_key?: string };
 
 // ---------------------------------------------------------------------------
 // Crews & events

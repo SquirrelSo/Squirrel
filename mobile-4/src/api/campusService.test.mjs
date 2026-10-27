@@ -242,6 +242,21 @@ test('out-of-order or duplicate timestamps and inaccurate fixes are dropped', ()
   assert.deepEqual(out.points, [...pts.slice(0, 5), ...pts.slice(6)]);
 });
 
+test('submitActivity payload forwards idempotency_key', () => {
+  const pts = run(5);
+  const input = {
+    type: 'run',
+    started_at: '2026-10-26T12:00:00.000Z',
+    ended_at: '2026-10-26T12:10:00.000Z',
+    points: pts,
+    idempotency_key: 'campus:activity:test-123',
+  };
+  const { points } = pointsForCampus(input.points, AREA);
+  const payload = { ...input, points };
+  assert.equal(payload.idempotency_key, 'campus:activity:test-123');
+  assert.equal(payload.points.length, 5);
+});
+
 test('very long recordings are thinned to the server limit, keeping the last fix', () => {
   const pts = Array.from({ length: CAMPUS_MAX_POINTS + 500 }, (_, i) => fix(i, CENTER[0] + i * 0.000001)); // a slow, steady walk
   const out = pointsForCampus(pts, null);

@@ -1,9 +1,9 @@
 /**
  * Activities (runs / walks).
  *
- *   POST /v1/activities                      create (optionally with the full point array → finishes immediately)
- *   POST /v1/activities/:id/points           { idempotency_key, points[] }  ≤ 1000 per batch, seq = index in full array
- *   POST /v1/activities/:id/finish           { ended_at?, client_distance_m?, client_duration_s?, device? } → PENDING, queued
+ *   POST /v1/activities                      create (optionally with the full point array â†’ finishes immediately)
+ *   POST /v1/activities/:id/points           { idempotency_key, points[] }  â‰¤ 1000 per batch, seq = index in full array
+ *   POST /v1/activities/:id/finish           { ended_at?, client_distance_m?, client_duration_s?, device? } â†’ PENDING, queued
  *   GET  /v1/activities                      my history (cursor paging)
  *   GET  /v1/activities/:id                  summary (server-derived stats)
  *   GET  /v1/activities/:id/verification     status + coarse band + user-safe reason (no raw signals)
@@ -11,7 +11,7 @@
  *   GET  /v1/runs/:id/zones                  alias used by the mobile app
  *
  * Ownership rule: a user sees only their own activities. Zone interactions come from the
- * verification pipeline — never from anything the client claims.
+ * verification pipeline â€” never from anything the client claims.
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -38,6 +38,7 @@ const CreateBody = z.object({
   client_distance_m: z.number().min(0).max(200_000).optional(),
   client_duration_s: z.number().int().min(0).max(86_400).optional(),
   device: z.record(z.unknown()).optional(),
+  idempotency_key: z.string().min(1).max(200).optional(),
 });
 const PointsBody = z.object({ idempotency_key: z.string().min(1).max(200).optional(), points: z.array(PointSchema).min(1).max(config.gps.maxPointsPerBatch) });
 const FinishBody = z.object({
@@ -62,6 +63,21 @@ export async function activityRoutes(app: FastifyInstance) {
   app.post('/v1/activities', { preHandler: requireAuth, config: { rateLimit: { max: 50, timeWindow: '1 day' } } }, async (req, reply) => {
     const user = currentUser(req);
     const body = CreateBody.parse(req.body ?? {});
+    const headerKey = typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'].trim() : null;
+    const rawKey = body.idempotency_key ?? (headerKey || null);
+    const scope = 'activity:create';
+    const idempotencyKey = rawKey;
+    if (idempotencyKey) {
+      const replay = await one<{ response: any; status_code: number }>(
+        `SELECT response, status_code FROM idempotency_keys WHERE user_id = $1 AND key = $2 AND scope = $3`,
+        [user.id, idempotencyKey, scope]
+      );
+      if (replay) {
+        reply.code(replay.status_code);
+        return replay.response;
+      }
+    }
+
     const type = body.activity_type ?? body.type;
     const startedAt = new Date(body.started_at);
     if (startedAt.getTime() > Date.now() + 60_000) throw errors.invalid('started_at is in the future');
@@ -70,7 +86,21 @@ export async function activityRoutes(app: FastifyInstance) {
     const points = body.points ? assignSeq(body.points, 0) : null;
     if (points) validatePoints(points, null, { startedAt: body.started_at, maxPoints: config.gps.maxPointsPerActivity });
 
-    const activity = await withTransaction(async (tx) => {
+    type CreateOutcome = { replayed: true; statusCode: number; response: any } | { replayed: false; activity: ActivityRow; response: any };
+
+    const outcome = await withTransaction<CreateOutcome>(async (tx) => {
+      if (idempotencyKey) {
+        await query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${user.id}:${scope}:${idempotencyKey}`], tx);
+        const replayInTx = await one<{ response: any; status_code: number }>(
+          `SELECT response, status_code FROM idempotency_keys WHERE user_id = $1 AND key = $2 AND scope = $3`,
+          [user.id, idempotencyKey, scope],
+          tx
+        );
+        if (replayInTx) {
+          return { replayed: true, statusCode: replayInTx.status_code, response: replayInTx.response };
+        }
+      }
+
       const a = (await one<ActivityRow>(
         `INSERT INTO activities (user_id, activity_type, started_at, ended_at, client_distance_m, client_duration_s, device_metadata, verification_status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
@@ -82,14 +112,29 @@ export async function activityRoutes(app: FastifyInstance) {
         await query(`UPDATE activities SET point_count = $2, raw_track = $3::geometry, finished_at = now() WHERE id = $1`, [a.id, n, points.length >= 2 ? `SRID=4326;${toLineStringWkt(points)}` : null], tx);
         await enqueueVerification(a.id, tx);
       }
-      return (await getActivity(a.id, tx))!;
+      const act = (await getActivity(a.id, tx))!;
+      const response = { activity_id: act.id, run_id: act.id, ...serializeActivity(act) };
+      if (idempotencyKey) {
+        await query(
+          `INSERT INTO idempotency_keys (user_id, key, scope, status_code, response) VALUES ($1, $2, $3, 201, $4) ON CONFLICT DO NOTHING`,
+          [user.id, idempotencyKey, scope, response],
+          tx
+        );
+      }
+      return { replayed: false, activity: act, response };
     });
+
+    if (outcome.replayed) {
+      reply.code(outcome.statusCode);
+      return outcome.response;
+    }
+
     if (!points) {
-      await touchPresenceActivity(user.id, activity.id, type, activity.started_at).catch(() => undefined);
+      await touchPresenceActivity(user.id, outcome.activity.id, type, outcome.activity.started_at).catch(() => undefined);
       await onPresenceActivityChanged(user.id, true);
     }
     reply.code(201);
-    return { activity_id: activity.id, run_id: activity.id, ...serializeActivity(activity) };
+    return outcome.response;
   });
 
   app.post('/v1/activities/:id/points', { preHandler: requireAuth, config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (req) => {
@@ -110,7 +155,7 @@ export async function activityRoutes(app: FastifyInstance) {
     // Sort defensively by seq so an out-of-order batch still validates in order.
     points.sort((x, y) => x.seq - y.seq);
     if (prev && points[0]!.seq <= prev.seq) {
-      // Retry of an already-stored range without a key → treat as replay if all seqs already exist.
+      // Retry of an already-stored range without a key â†’ treat as replay if all seqs already exist.
       const existing = await one<{ n: number }>(`SELECT count(*)::int AS n FROM activity_points WHERE activity_id = $1 AND seq BETWEEN $2 AND $3`, [id, points[0]!.seq, points[points.length - 1]!.seq]);
       if ((existing?.n ?? 0) === points.length) return { accepted: 0, replayed: true, point_count: a.point_count };
       throw errors.invalidGps(`seq must continue after ${prev.seq}`);

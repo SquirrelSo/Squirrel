@@ -460,7 +460,8 @@ export default function Run() {
       if ((CAMPUS_SOURCE === 'mock' || toCampusService) && !activityIdRef.current) {
         // The dev mock and campus-service record the route themselves; the Run Module keeps its own copy.
         const pts = points.map((p) => ({ lat: p.lat, lng: p.lon, recorded_at: new Date(p.t).toISOString(), accuracy_m: p.accuracy ?? 10 }));
-        const r = await campusApi.submitActivity({ type: kind, started_at: new Date(startedAt.current).toISOString(), ended_at: new Date(endedAt.current).toISOString(), points: pts });
+        const idempotencyKey = runIdRef.current ? `campus:activity:${runIdRef.current}` : `campus:activity:${startedAt.current}`;
+        const r = await campusApi.submitActivity({ type: kind, started_at: new Date(startedAt.current).toISOString(), ended_at: new Date(endedAt.current).toISOString(), points: pts, idempotency_key: idempotencyKey });
         activityIdRef.current = r.activity_id;
         id = r.activity_id;
       }
