@@ -35,6 +35,7 @@ const { verifyActivity } = await import('../src/verification/worker.js');
 const { configureRunBridge } = await import('../src/run/index.js');
 const { configureSocialBridge } = await import('../src/identity/index.js');
 const { trackAlong, sweepRect } = await import('../test/helpers.js');
+const { cellFor } = await import('../src/bubble/cells.js');
 const { exerciseSessionXp, activityEntries } = await import('../../run-module/backend/src/xp/rules.js');
 
 const silent = { info() {}, warn() {}, error() {} };
@@ -92,6 +93,10 @@ async function main() {
       let raw = '';
       req.on('data', (chunk) => { raw += chunk; });
       req.on('end', () => {
+        if (req.method === 'POST' && req.url === '/internal/v1/crews/memberships') {
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ people: [] }));
+          return;
+        }
         if (req.method === 'POST' && req.url === '/internal/v1/people/resolve') {
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ people: [] }));
           return;
@@ -305,22 +310,60 @@ async function main() {
 
   // 7. Nearby users (/nearby limit clamp 20, open-to-meet, blocks)
   try {
-    const viewer = '00000000-0000-0000-0000-000000000001';
-    const nearbyRes = await api('GET', '/v1/bubble/nearby?limit=50', viewer);
-    const clampedTo20 = nearbyRes.status === 200 && nearbyRes.body.items.length <= 20;
+    const targetCell = cellFor(22.962, 88.528).key;
+    const viewer = '00000000-0000-0000-0000-000000000099';
 
-    await api('POST', '/v1/blocks', viewer, { target_user_id: '00000000-0000-0000-0000-000000000002' });
-    const nearbyAfterBlock = await api('GET', '/v1/bubble/nearby', viewer);
-    const blockedExcluded = !(nearbyAfterBlock.body.items || []).some(
-      (i: any) => i.user_id === '00000000-0000-0000-0000-000000000002'
+    // Seed viewer in users & bubble_members
+    await campusPool.query(
+      `INSERT INTO users (id, display_name, email, email_domain, open_to_meet, open_to_meet_until, onboarding_completed, is_banned)
+       VALUES ($1, 'Viewer User', 'viewer@iiserkol.ac.in', 'iiserkol.ac.in', true, now() + interval '1 day', true, false)
+       ON CONFLICT (id) DO UPDATE SET open_to_meet = true, open_to_meet_until = now() + interval '1 day'`,
+      [viewer]
+    );
+    await campusPool.query(
+      `INSERT INTO bubble_members (user_id, cell, zone_id, activity_type, joined_at, refreshed_at, expires_at)
+       VALUES ($1, $2, 'cc1', 'walk', now(), now(), now() + interval '1 hour')
+       ON CONFLICT (user_id) DO UPDATE SET cell = EXCLUDED.cell, expires_at = EXCLUDED.expires_at`,
+      [viewer, targetCell]
     );
 
-    const pass7 = clampedTo20 && blockedExcluded;
+    // Seed 25 other test users in the exact same cell, all open-to-meet
+    for (let i = 1; i <= 25; i++) {
+      const uid = `00000000-0000-0000-0000-0000000000${String(i + 10).padStart(2, '0')}`;
+      const name = `Bubble User ${String(i).padStart(2, '0')}`;
+      const email = `bubble${i}@iiserkol.ac.in`;
+      await campusPool.query(
+        `INSERT INTO users (id, display_name, email, email_domain, open_to_meet, open_to_meet_until, onboarding_completed, is_banned)
+         VALUES ($1, $2, $3, 'iiserkol.ac.in', true, now() + interval '1 day', true, false)
+         ON CONFLICT (id) DO UPDATE SET open_to_meet = true, open_to_meet_until = now() + interval '1 day'`,
+        [uid, name, email]
+      );
+      await campusPool.query(
+        `INSERT INTO bubble_members (user_id, cell, zone_id, activity_type, joined_at, refreshed_at, expires_at)
+         VALUES ($1, $2, 'cc1', 'run', now(), now() - make_interval(secs => $3), now() + interval '1 hour')
+         ON CONFLICT (user_id) DO UPDATE SET cell = EXCLUDED.cell, expires_at = EXCLUDED.expires_at`,
+        [uid, targetCell, i]
+      );
+    }
+
+    // Call GET /v1/bubble/nearby?limit=50 as viewer
+    const nearbyRes = await api('GET', '/v1/bubble/nearby?limit=50', viewer);
+        const exactly20 = nearbyRes.status === 200 && nearbyRes.body.items?.length === 20;
+    const hasNextCursor = !!nearbyRes.body.next_cursor;
+
+    // Block one of the nearby users and confirm exclusion
+    const blockedUserId = '00000000-0000-0000-0000-000000000011'; // Bubble User 01
+    await api('POST', '/v1/blocks', viewer, { target_user_id: blockedUserId });
+    const nearbyAfterBlock = await api('GET', '/v1/bubble/nearby?limit=50', viewer);
+    const blockedExcluded = !(nearbyAfterBlock.body.items || []).some((i: any) => i.user_id === blockedUserId);
+    const stillClamped = nearbyAfterBlock.body.items?.length === 20; // 24 candidates left, still clamped to 20
+
+    const pass7 = exactly20 && hasNextCursor && blockedExcluded && stillClamped;
     results.push({
       item: 7,
-      title: 'Nearby users (limit clamp 20, open-to-meet, blocks)',
+      title: 'Nearby users (25 users seeded in cell, limit=50 clamped to exactly 20, open-to-meet, blocks)',
       pass: pass7,
-      detail: `ClampLimit50=${nearbyRes.body.items?.length <= 20} (got ${nearbyRes.body.items?.length}); BlockExcluded=${blockedExcluded}`,
+      detail: `TotalCandidates=25; RequestedLimit=50; ReturnedItems=${nearbyRes.body.items?.length} (exp 20); NextCursor=${hasNextCursor}; BlockExcluded=${blockedExcluded}; StillClamped=${stillClamped}`,
     });
   } catch (err: any) {
     results.push({ item: 7, title: 'Nearby users', pass: false, detail: err.message });
