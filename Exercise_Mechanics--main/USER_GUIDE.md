@@ -15,10 +15,22 @@ The current usable exercises are:
 - Single Arm Bicep Curl
 - Double Arm Bicep Curl
 - High Knees
+- Push-up
 
 Lunges and Plank may be visible in the exercise library, but they are still marked **Coming Soon**.
 
-The overall journey is:
+> **Push-up is filmed from your side**, not facing you, because the two things it measures — how far
+> your elbows bend and whether your body stays in a straight line — cannot be seen from the front.
+> Setup will not begin a set until the camera is beside you, and if you turn to face it mid-set the
+> app says so and stops counting reps until you turn back.
+
+> **The app currently opens straight on a push-up set.** It skips the profile and workout-building
+> steps described below and puts you on the setup screen immediately. To use the full journey
+> instead, add `?demo=off` to the address — for example `http://localhost:8000/?demo=off`. (A
+> developer can make that the default again: see "The app currently opens straight on a push-up set"
+> in [`README.md`](README.md).)
+
+The overall journey, with the demo switched off, is:
 
 ```text
 Install once → Start the server → Open the web page → Create or select a profile

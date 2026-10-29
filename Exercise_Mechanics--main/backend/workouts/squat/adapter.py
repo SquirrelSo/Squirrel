@@ -10,6 +10,7 @@ from types import ModuleType
 
 from backend.core.frame import TrainingFrame
 from backend.engine.cues import CueCandidate, CueSelector
+from backend.engine import rep_outcome
 from backend.engine.loader import ExerciseConfiguration, load_exercise_config
 from backend.engine.scorer import CompletedRep, RepScore, RepScorer, ScoreCoverage
 from backend.engine.timeline import TimelineFrame
@@ -191,6 +192,23 @@ class SquatAdapter:
                 )
             )
             self._pending_shallow_depth_cue = False
+        # A rep that did not count (too fast, or short of full range), or a shallow rep that did,
+        # is said at once.
+        not_counted = rep_outcome.not_counted_cue(
+            state.completed_attempt,
+            fsm=self._config.fsm,
+            rom_rule_id="depth",
+            rom_template=self._config.templates["depth"],
+        )
+        if not_counted is not None:
+            candidates.append(not_counted)
+        shallow_warning = rep_outcome.shallow_warning_cue(
+            state.completed_attempt,
+            rom_rule_id="depth",
+            rom_template=self._config.templates["depth"],
+        )
+        if shallow_warning is not None:
+            candidates.append(shallow_warning)
         cue = self._cue_selector.select(candidates, frame.t_ms)
         self._previous_phase = state.phase
         return self._status(state, readings, issues, cue)
@@ -244,6 +262,7 @@ class SquatAdapter:
             "rep": state.qualified_count if attempt.qualified else None,
             "qualified": attempt.qualified,
             "classification": attempt.classification,
+            **rep_outcome.attempt_fields(attempt),
             "peak": attempt.peak,
             "score": score.score,
             "time_score": score.time_score,
@@ -291,13 +310,7 @@ class SquatAdapter:
                 "unavailable_rule_ids": unavailable,
             },
             "phase": state.phase,
-            "counters": {
-                "attempts": state.attempt_count,
-                "qualified": state.qualified_count,
-                "full_rom": state.full_rom_count,
-                "shallow": state.shallow_count,
-                "invalid": state.invalid_attempt_count,
-            },
+            "counters": rep_outcome.counters(state),
             "rom": {
                 "available": depth is not None,
                 "ratio": (round(depth.depth_ratio, 3) if depth is not None else None),
@@ -434,6 +447,9 @@ def _fsm_inputs(config: ExerciseConfiguration) -> dict:
         )
     }
     values["max_frame_delta_ms"] = config.scoring["max_frame_delta_ms"]
+    values["max_tracking_gap_ms"] = config.fsm.get("max_tracking_gap_ms")
+    values.update(rep_outcome.fsm_policy_inputs(config.fsm))
+    values["frame_cadence"] = config.scoring.get("frame_cadence")
     return values
 
 

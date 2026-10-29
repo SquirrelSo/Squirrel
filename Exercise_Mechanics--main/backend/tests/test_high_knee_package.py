@@ -282,7 +282,7 @@ def test_high_knee_is_enabled_and_registered_for_normal_startup():
     entry = load_catalog().get("high_knee")
     assert entry is not None and entry.status == "enabled" and entry.view == "front"
     assert "high_knee" in EXERCISE_BUILDERS
-    assert validate_training_builders() == ("bicep_curl", "high_knee", "squat")
+    assert validate_training_builders() == ("bicep_curl", "high_knee", "pushup", "squat")
     assert load_exercise_config("high_knee").fsm["movement_type"] == "time"
 
 

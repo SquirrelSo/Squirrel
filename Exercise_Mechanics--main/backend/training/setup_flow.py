@@ -7,7 +7,7 @@ from math import isfinite
 from numbers import Real
 
 from backend.config import CONFIDENCE_MIN
-from backend.core.keypoints import missing_keypoints
+from backend.core.keypoints import missing_either_side, missing_keypoints
 from backend.training.baseline import BaselineCollector, BaselineQuality
 from backend.training.setup_config import SetupConfig
 from backend.training.setup_contract import ConditionResult, SetupExerciseAdapter
@@ -58,6 +58,8 @@ class SetupOrchestrator:
         self._min_visibility = float(min_visibility)
         self._phase = PRECHECK
         self._precheck_since: float | None = None
+        # When the current run of failing pre-check frames began (None while passing).
+        self._precheck_failing_since: float | None = None
         self._last_timestamp: float | None = None
 
         self._collector = self._new_collector()
@@ -165,22 +167,33 @@ class SetupOrchestrator:
         )
 
     def _update_precheck(self, keypoints: dict, now_ms: float) -> None:
-        missing = tuple(
-            missing_keypoints(
-                keypoints,
-                self._config.required_keypoints,
-                self._min_visibility,
-            )
-        )
+        missing = self._missing(keypoints)
         results = self._adapter.evaluate(self._config.pre_check_templates, keypoints)
         self._assert_result_ids(self._config.pre_check_templates, results)
         self._last_missing = missing
         self._last_conditions = results
-        self._validation_results = ()
+        # The reason the last capture was rejected (unsteady, tracking gap, validation) stays in the
+        # status until the next capture starts, so the person can read why the ring emptied.
         all_pass = not missing and all(result.passed for result in results)
         if not all_pass:
-            self._precheck_since = None
+            # A flicker shorter than invalid_pause_ms (landmark jitter: a relaxed knee read at
+            # 159 deg for a frame) does not restart the stable hold; a real failure does. Without
+            # this grace, one noisy frame restarts the whole hold, and on a phone's lighter pose
+            # model a person standing correctly can be kept here indefinitely. Failing frames never
+            # complete the hold (that happens only below, on a passing frame).
+            if self._precheck_since is None:
+                return
+            if self._precheck_failing_since is None:
+                self._precheck_failing_since = now_ms
+            if now_ms - self._precheck_failing_since >= self._config.invalid_pause_ms:
+                self._precheck_since = None
+                self._precheck_failing_since = None
             return
+        if self._precheck_failing_since is not None:
+            # The failure lasted until this passing frame: too long a run restarts the hold here.
+            if now_ms - self._precheck_failing_since >= self._config.invalid_pause_ms:
+                self._precheck_since = None
+            self._precheck_failing_since = None
         if self._precheck_since is None:
             self._precheck_since = now_ms
         if now_ms - self._precheck_since >= self._config.stable_ms:
@@ -188,13 +201,7 @@ class SetupOrchestrator:
             self._begin_capture()
 
     def _update_capture(self, keypoints: dict, now_ms: float) -> None:
-        missing = tuple(
-            missing_keypoints(
-                keypoints,
-                self._config.required_keypoints,
-                self._min_visibility,
-            )
-        )
+        missing = self._missing(keypoints)
         results = self._adapter.evaluate(
             self._config.baseline_capture_templates,
             keypoints,
@@ -242,7 +249,12 @@ class SetupOrchestrator:
             observed_frames=self._observed_frames,
             valid_duration_ms=self._capture_valid_ms,
         )
-        if quality.max_joint_stddev_px > self._config.max_joint_stddev_px:
+        # Stillness relative to the person's size (baseline.BaselineQuality): pixels would demand
+        # an ever steadier stance the closer the person stands.
+        if (
+            quality.max_joint_stddev_rel is None
+            or quality.max_joint_stddev_rel > self._config.max_joint_stddev_torso
+        ):
             failure = ConditionResult(
                 "baseline_quality",
                 "failed",
@@ -250,7 +262,9 @@ class SetupOrchestrator:
                 "Hold still and keep the full body visible.",
                 {
                     "max_joint_stddev_px": quality.max_joint_stddev_px,
-                    "allowed_px": self._config.max_joint_stddev_px,
+                    "body_scale_px": quality.body_scale_px,
+                    "max_joint_stddev_torso": quality.max_joint_stddev_rel,
+                    "allowed_torso": self._config.max_joint_stddev_torso,
                 },
             )
             self._reset_to_precheck((failure,))
@@ -291,13 +305,21 @@ class SetupOrchestrator:
     ) -> None:
         self._phase = PRECHECK
         self._precheck_since = None
+        self._precheck_failing_since = None
         self._begin_capture()
         self._validation_results = validation_results
+
+    def _missing(self, keypoints: dict) -> tuple[str, ...]:
+        return (
+            *missing_keypoints(keypoints, self._config.required_keypoints, self._min_visibility),
+            *missing_either_side(keypoints, self._config.either_side, self._min_visibility),
+        )
 
     def _new_collector(self) -> BaselineCollector:
         return BaselineCollector(
             self._config.required_keypoints,
             min_visibility=self._min_visibility,
+            either_side=self._config.either_side,
         )
 
     @staticmethod

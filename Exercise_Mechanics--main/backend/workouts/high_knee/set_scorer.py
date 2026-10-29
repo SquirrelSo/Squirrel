@@ -61,6 +61,7 @@ class HighKneeLiftScorer:
             side: RepTimeline(
                 phases,
                 max_frame_delta_ms=float(config.scoring["max_frame_delta_ms"]),
+                frame_cadence=config.scoring.get("frame_cadence"),
             )
             for side in _SIDES
         }
@@ -166,6 +167,7 @@ class HighKneeSetScorer:
                 for rule_id in self._penalty_ids
             },
             max_frame_delta_ms=float(config.scoring["max_frame_delta_ms"]),
+            frame_cadence=config.scoring.get("frame_cadence"),
         )
         self._counted_peaks: list[float] = []
         self._detected_cycles = 0

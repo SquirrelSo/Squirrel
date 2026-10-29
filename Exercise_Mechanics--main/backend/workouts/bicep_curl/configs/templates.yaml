@@ -9,6 +9,12 @@ scoring:
   min_active_ms: 250
   min_active_frames: 5
   max_frame_delta_ms: 100
+  # The tracking-gap boundary scales with the observed frame interval so slow phone cameras
+  # (10-15 fps) are not mistaken for lost tracking: tolerance_frames x median interval, never
+  # below max_frame_delta_ms (unchanged at ~30 fps) and never above max_gap_ms.
+  frame_cadence:
+    tolerance_frames: 3
+    max_gap_ms: 400
   cue_min_display_ms: 800
 
 templates:
@@ -205,7 +211,9 @@ templates:
     tuning_status: development
     fault_label: "Short curl"
     active_phases: [ascent, top, descent]
-    required_keypoints: [left_shoulder, right_shoulder, left_elbow, right_elbow, left_wrist, right_wrist, left_hip, right_hip]
+    # Shoulders only: elbows and wrists are optional (either arm curling counts) and the hips are not
+    # used, so curling close to the camera with the hips out of frame still counts (rules/curl_rom.py).
+    required_keypoints: [left_shoulder, right_shoulder]
     issue: "The curl does not reach the intended flexion at the top."
     cue: "Curl all the way up with control."
     coaching: "You're cutting your curls short. Squeeze the weight all the way up until your forearm nearly meets your biceps, pause at the top, then lower under control — the full range is where the muscle is built."
@@ -216,6 +224,11 @@ templates:
     min_upper_arm_px: 30
     full_rom_gate: 0.75
     shallow_next_rep_cue_ms: 500
+    # The planned curl (session variant), said when the arms do not match it: a single-arm set in
+    # which both arms curl together, or a double-arm set in which one arm stays down.
+    variant_cues:
+      single: "Single-arm curl: curl one arm at a time."
+      double: "Curl with both arms together."
     scoring:
       role: rom
       mode: rom

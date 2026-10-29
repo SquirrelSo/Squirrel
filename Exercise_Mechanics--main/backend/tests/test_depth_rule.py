@@ -132,10 +132,20 @@ def test_hip_below_knee_atg_indicator():
 
 # ── keypoint gating (no reading on partial/low-confidence data) ────────────────────
 
-def test_missing_landmark_returns_none():
+def test_missing_hip_returns_none():
+    kps = _kps(hip_y=270.0)
+    del kps["left_hip"]
+    assert _rule().read(kps) is None
+
+
+def test_hidden_knees_still_read_depth_from_the_hips():
+    # Close to the camera the knees reach the bottom edge of the image as the person squats.
     kps = _kps(hip_y=270.0)
     del kps["left_knee"]
-    assert _rule().read(kps) is None
+    kps["right_knee"]["v"] = 0.2
+    reading = _rule().read(kps)
+    assert reading.depth_ratio == pytest.approx(0.5)
+    assert reading.hip_below_knee is None
 
 
 def test_low_confidence_landmark_returns_none():

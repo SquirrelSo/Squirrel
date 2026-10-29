@@ -18,4 +18,4 @@ def test_load_squat_setup_combines_visibility_precheck_and_capture_configuration
     assert config.min_valid_coverage == 0.8
     assert config.invalid_pause_ms == 250.0
     assert config.invalid_reset_ms == 1000.0
-    assert config.max_joint_stddev_px == 8.0
+    assert config.max_joint_stddev_torso == 0.12

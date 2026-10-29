@@ -22,7 +22,9 @@ class SetupConfig:
     min_valid_coverage: float
     invalid_pause_ms: float
     invalid_reset_ms: float
-    max_joint_stddev_px: float
+    max_joint_stddev_torso: float
+    # Joints needed on at least one side (setup.yaml `either_side`), by base name ("shoulder").
+    either_side: tuple[str, ...] = ()
 
 
 @lru_cache(maxsize=None)
@@ -48,6 +50,7 @@ def build_setup_config(bundle: ExerciseConfiguration) -> SetupConfig:
     return SetupConfig(
         exercise=str(spec["exercise"]),
         required_keypoints=tuple(spec["keypoints"]),
+        either_side=tuple(spec.get("either_side") or ()),
         pre_check_templates=pre_check_templates,
         baseline_capture_templates=baseline_templates,
         stable_ms=float(pre_check["stable_ms"]) if pre_check_templates else 0.0,
@@ -58,5 +61,5 @@ def build_setup_config(bundle: ExerciseConfiguration) -> SetupConfig:
         min_valid_coverage=float(capture["min_valid_coverage"]),
         invalid_pause_ms=float(capture["invalid_pause_ms"]),
         invalid_reset_ms=float(capture["invalid_reset_ms"]),
-        max_joint_stddev_px=float(capture["max_joint_stddev_px"]),
+        max_joint_stddev_torso=float(capture["max_joint_stddev_torso"]),
     )

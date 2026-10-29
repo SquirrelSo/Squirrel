@@ -116,12 +116,22 @@ function train(value: unknown): WSTrain | null {
   const unavailableRules = stringArray(tracking.unavailable_rule_ids)
   const activeRules = stringArray(data.active_rule_ids)
   const issues = issueArray(data.issues)
+  // Optional: only exercises with a measurement-invalidating rule (push-up's side_view_orientation)
+  // send it, so an absent key is a valid empty list rather than a malformed frame.
+  const invalidatedBy = tracking.invalidated_by === undefined ? [] : stringArray(tracking.invalidated_by)
   if (
     typeof tracking.available !== 'boolean'
     || !unavailableRules
     || !activeRules
     || !unique(activeRules)
     || !issues
+    || !invalidatedBy
+    || !unique(invalidatedBy)
+    // An invalidating rule has to be one of the rules actually running, and a frame that names one
+    // cannot simultaneously claim its measurements are usable. Both are backend invariants; a
+    // stream that breaks either would have the HUD count reps it should be refusing to count.
+    || invalidatedBy.some((id) => !activeRules.includes(id))
+    || (invalidatedBy.length > 0 && tracking.available)
   ) return null
 
   const attempts = count(counters.attempts)
@@ -203,7 +213,7 @@ function train(value: unknown): WSTrain | null {
   ) return null
 
   return {
-    tracking: { available: tracking.available, unavailable_rule_ids: unavailableRules },
+    tracking: { available: tracking.available, unavailable_rule_ids: unavailableRules, invalidated_by: invalidatedBy },
     phase: data.phase as WSRepTrain['phase'],
     counters: { attempts, qualified, full_rom: fullRom, shallow, invalid },
     rom: {

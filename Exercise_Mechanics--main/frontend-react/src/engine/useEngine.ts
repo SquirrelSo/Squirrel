@@ -60,6 +60,7 @@ export function initialState(): EngineState {
     poseDepth: 0,
     romPercentage: 0,
     romPeak: 0,
+    measurementBlockedBy: [],
     romArms: null,
     romLegs: null,
     currentJointAngle: DEFAULT_JOINT_ANGLE,
@@ -277,6 +278,7 @@ function reducer(state: EngineState, action: Action): EngineState {
         romPeak: 0,
         romArms: null,
         romLegs: null,
+        measurementBlockedBy: [],
         formScore: null,
         scoreCoverage: null,
         scoreConfidence: 0,
@@ -297,7 +299,7 @@ function reducer(state: EngineState, action: Action): EngineState {
         correctionSeverity: null, flaggedJoint: null, flaggedSide: null, cue: null, trackingStatus: 'searching',
         attemptCount: 0, currentRep: 0, fullRomCount: 0, shallowCount: 0, invalidCount: 0,
         romPeak: 0, formScore: null, scoreCoverage: null, scoreConfidence: 0,
-        romLegs: null, remainingTime: state.targetMeasure === 'time' ? state.targetDurationSeconds : 0,
+        romLegs: null, measurementBlockedBy: [], remainingTime: state.targetMeasure === 'time' ? state.targetDurationSeconds : 0,
         currentCadenceSpm: null, averageCadenceSpm: null,
         repTicks: Array(state.targetReps).fill(null), pendingRepFaults: {}, socketError: null, disconnected: false,
       }
@@ -518,11 +520,25 @@ export function foldTrain(state: EngineState, d: WSTrain): EngineState {
   }
 
   if (!d.tracking.available) {
-    // Tracking lost: hold values, show a neutral "hold still" cue (never zero, never jump).
+    // Measurements are held either way (never zero, never jump), but WHY they are held decides what
+    // the user is told. `invalidated_by` non-empty means the body is perfectly visible and a rule
+    // has declared the reading meaningless — a push-up filmed front-on. That user is not going to
+    // be helped by "hold still": they need to be told to turn, and told that reps have stopped
+    // counting until they do. The backend already wrote that cue, so it is used verbatim rather
+    // than replaced with the generic one.
+    const blocked = d.tracking.invalidated_by.length > 0
+    const backendCue: CorrectionCue | null = blocked && d.cue
+      ? { text: d.cue.text, severity: 'error', joint: cueJoint(d.cue.rule_id), side: null }
+      : null
+    const heldCue = state.cue && state.cue.severity === 'neutral' ? state.cue : null
     return {
       ...state, train: d, trackingStatus: 'low', socketError: null,
-      cue: state.cue && state.cue.severity === 'neutral' ? state.cue : { text: 'Hold still for tracking', severity: 'neutral', joint: null, side: null },
-      correctionSeverity: 'neutral', flaggedJoint: null, flaggedSide: null,
+      measurementBlockedBy: d.tracking.invalidated_by,
+      cue: backendCue
+        ?? (blocked ? null : heldCue ?? { text: 'Hold still for tracking', severity: 'neutral', joint: null, side: null }),
+      correctionSeverity: blocked ? 'error' : 'neutral',
+      flaggedJoint: backendCue?.joint ?? null,
+      flaggedSide: null,
     }
   }
 
@@ -609,7 +625,7 @@ export function foldTrain(state: EngineState, d: WSTrain): EngineState {
   }
 
   return {
-    ...state, train: d, trackingStatus: 'active', phase: d.phase,
+    ...state, train: d, trackingStatus: 'active', phase: d.phase, measurementBlockedBy: [],
     attemptCount: d.counters.attempts, currentRep: rep, fullRomCount: d.counters.full_rom,
     shallowCount: d.counters.shallow, invalidCount: d.counters.invalid,
     poseDepth: Math.max(0, Math.min(1, d.rom.ratio ?? state.poseDepth)),
@@ -646,6 +662,11 @@ function cueJoint(ruleId: string): FlaggedJoint {
   if (ruleId === 'shoulder_elevation') return 'shoulders'
   if (ruleId === 'curl_rom') return 'wrists'
   if (ruleId === 'knee_drive_rom') return 'knees'
+  // Push-up. `side_view_orientation` is deliberately absent: a camera at the wrong angle is not a
+  // fault located anywhere on the body, and reddening a limb for it would blame the user's form
+  // for the operator's mistake.
+  if (ruleId === 'pushup_depth') return 'elbows'
+  if (ruleId === 'body_line' || ruleId === 'plank_ready') return 'trunk'
   return null
 }
 

@@ -1,7 +1,7 @@
 /* Hud.tsx — F3 HUD components: C8 Timer, C7 FormScore, C5 ROM, C6 RepBar, C4 Cue,
    C9 MetricsStrip, C12 PauseMenu. Ported in look from the prototype's components.jsx,
    rewired to the real EngineState. */
-import type { EngineState } from '../types'
+import type { EngineState, Severity } from '../types'
 import type { EngineDispatch } from '../engine/useEngine'
 import { Q, qColor, formBand, TYPE, Icon, L, Ring, fmtClock } from '../tokens'
 import { isDimmed } from '../selectors'
@@ -141,7 +141,7 @@ export function RomMeter({ s }: { s: EngineState }) {
   const HEIGHT = 240
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, opacity: dim ? 0.45 : 1, transition: 'opacity .35s' }}>
-      <L style={{ fontSize: 10 }}>Range of motion</L>
+      <L style={{ fontSize: 10 }}>{s.currentExercise.romLabel}</L>
       <div style={{ position: 'relative', width: 30, height: HEIGHT, borderRadius: 16, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', left: -5, right: -5, bottom: `${target}%`, height: 2, background: 'rgba(255,255,255,0.55)' }} />
         <div style={{ position: 'absolute', left: 0, right: 0, bottom: `${peak}%`, height: 2, background: col, opacity: 0.6 }} />
@@ -232,9 +232,25 @@ export function CorrectionCue({ s }: { s: EngineState }) {
       <span style={{ width: 38, height: 38, borderRadius: 11, background: col, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
         {Ic({ size: 23, stroke: '#08090c', sw: 3 })}
       </span>
-      <span style={{ ...TYPE.body, fontSize: 24, color: Q.neutral, fontWeight: 600 }}>{cue.text}</span>
+      <span>
+        <span style={{ ...TYPE.body, fontSize: 24, color: Q.neutral, fontWeight: 600, display: 'block' }}>{cue.text}</span>
+        {/* The cue text alone does not say what KIND of message it is. Mid-set, a user glancing at
+            the pill needs to know in one beat whether they are being corrected, reassured, or told
+            the system has lost them — the same text with a different intent calls for a different
+            reaction. The sub-line is derived from severity, never authored per cue, so backend
+            copy stays the single source of the instruction itself. */}
+        <span style={{ ...TYPE.caption, fontSize: 13, color: col, display: 'block', marginTop: 2 }}>
+          {cueKind(sev)}
+        </span>
+      </span>
     </div>
   )
+}
+
+function cueKind(severity: Severity): string {
+  if (severity === 'success') return 'Good form'
+  if (severity === 'neutral') return 'Tracking'
+  return 'Adjust your form'
 }
 
 /* ---------- C9 Metrics HUD Strip (no Form/ROM here — no duplication) ---------- */

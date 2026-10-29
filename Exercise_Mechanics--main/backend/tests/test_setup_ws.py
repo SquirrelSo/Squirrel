@@ -8,6 +8,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 
 from backend import config
+from backend.auth import tokens
 from backend.sessions.store import create_session_record
 from backend.training import router as training_router
 from backend.training.baseline import load_baseline_document
@@ -112,6 +113,7 @@ def persisted_session(tmp_path, monkeypatch):
 def _query(user_id: str, session_id: str, *, set_no: str = "1") -> dict[str, str]:
     return {
         "user_id": user_id,
+        "token": tokens.issue_access_token(user_id)[0],
         "session_id": session_id,
         "exercise": "squat",
         "set_no": set_no,
@@ -224,3 +226,22 @@ def test_persistence_failure_never_emits_ready_or_start(
     assert websocket.sent[-1]["type"] == "setup.status"
     assert websocket.sent[-1]["data"]["phase"] == "precheck"
     assert websocket.sent[-1]["data"]["start"] is False
+
+
+@pytest.mark.parametrize("token_for", [None, "someone-else"])
+def test_setup_socket_needs_the_users_own_token(persisted_session, token_for):
+    user_id, session_id = persisted_session
+    query = {**_query(user_id, session_id), "token": tokens.issue_access_token(token_for)[0] if token_for else ""}
+    websocket = FakeWebSocket(query, _complete_capture_messages())
+    _run_setup(websocket)
+    assert websocket.sent[0]["data"]["code"] == "UNAUTHORIZED"
+    assert websocket.closed == (1008, "UNAUTHORIZED")
+
+
+def test_sockets_skip_the_token_check_when_auth_is_switched_off(persisted_session, monkeypatch):
+    monkeypatch.setenv(config.REQUIRE_AUTH_ENV, "0")
+    user_id, session_id = persisted_session
+    query = {k: v for k, v in _query(user_id, session_id).items() if k != "token"}
+    websocket = FakeWebSocket(query, _complete_capture_messages())
+    _run_setup(websocket)
+    assert websocket.sent[-1]["type"] == "setup.ready"

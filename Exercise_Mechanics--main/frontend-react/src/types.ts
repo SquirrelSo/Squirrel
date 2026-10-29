@@ -75,7 +75,13 @@ export interface WSSetup {
 
 /* /ws/train — backend-authoritative movement, taxonomy, scoring and coverage. */
 export interface WSRepTrain {
-  tracking: { available: boolean; unavailable_rule_ids: string[] }
+  /* `available` is the single "are these measurements trustworthy" flag. It goes false for two
+     very different reasons, and `invalidated_by` separates them: empty means the joints could not
+     be read (occlusion, user out of frame); non-empty names the rules that CAN read the body but
+     declare the reading meaningless — a push-up filmed front-on is the case this exists for. The
+     distinction is the difference between "hold still" and "turn side-on", so the HUD must not
+     collapse them. Exercises with no such rule always send an empty list. */
+  tracking: { available: boolean; unavailable_rule_ids: string[]; invalidated_by: string[] }
   /* Movement phases are exercise-defined: squat descends first (descent/bottom/ascent), curl
      ascends first (ascent/top/descent). setup + reset are the shared lifecycle phases. */
   phase: 'setup' | 'descent' | 'bottom' | 'ascent' | 'top' | 'reset'
@@ -192,13 +198,16 @@ export type RepTick = 'good' | 'amber' | 'poor' | 'missed' | null
 export interface ExerciseConfig {
   id: string
   name: string
-  motion: 'squat' | 'bicep_curl' | 'high_knee'
+  motion: 'squat' | 'bicep_curl' | 'high_knee' | 'pushup'
   targetReps: number
   targetSets: number
   trackedJoints: string[]
   trainedMuscles: string[]
   targetTempo: string
   targetROMThreshold: number
+  /* What the left-rail ROM meter calls this exercise's range signal. "Range of motion" reads
+     right for a squat's depth; a push-up's signal is elbow flexion, so it says "Depth" instead. */
+  romLabel: string
 }
 
 /* The real per-session targets, threaded from the Solo cart into the live engine
@@ -295,6 +304,13 @@ export interface EngineState {
   metricAvailability: { pace: boolean; repDuration: boolean; symmetry: boolean }
   tooFast: boolean
   lowRom: boolean
+
+  /* Rule ids that can see the body but declare the measurement meaningless (push-up's
+     side_view_orientation is the only one today). Non-empty means the rep machine is PAUSED by a
+     camera/setup problem the user can fix — distinct from tracking simply being lost, which leaves
+     this empty. The HUD says so explicitly, because silently not counting reps is the worst
+     possible failure mode for a live coach. */
+  measurementBlockedBy: string[]
 
   /* correction cue (single, prioritized) */
   cue: CorrectionCue | null

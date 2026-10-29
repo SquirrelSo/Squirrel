@@ -1,0 +1,1 @@
+ALTER TABLE meetup_participants ADD COLUMN checked_in_at timestamptz;

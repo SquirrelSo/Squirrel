@@ -9,11 +9,14 @@
      • Training Mode — split layout: a pose/keypoint panel on the left, the three
                        ways to train stacked on the right (Solo is live and gets
                        the hero card; Group/1:1 are compact "Soon" rows).
+     • Partner Hunt  — find people to train with, behind the Run Module's XP gate
+                       (PartnerHunt.tsx).
 */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Ico, Icon } from '../tokens'
 import { fetchActivity, fetchProfile, fetchSkillState, updateSkill, type CachedUser, type UserProfile } from './storage'
 import { Wordmark } from './uiV2'
+import { PartnerHunt } from './PartnerHunt'
 
 type SkillLevel = 'beginner' | 'intermediate' | 'advanced'
 
@@ -57,7 +60,7 @@ export function ModeSelect(
   { user, onSelectSolo, onLogout }:
   { user: CachedUser; onSelectSolo: () => void; onLogout: () => void },
 ) {
-  const [view, setView] = useState<'home' | 'training'>('home')
+  const [view, setView] = useState<'home' | 'training' | 'partners'>('home')
 
   return (
     <div className="v2 v2-hub">
@@ -70,12 +73,19 @@ export function ModeSelect(
           <button className={`v2-hnavitem${view === 'training' ? ' v2-hnavitem--active' : ''}`} onClick={() => setView('training')}>
             {Icon.dumbbell({ size: 18 })} Training
           </button>
+          <button className={`v2-hnavitem${view === 'partners' ? ' v2-hnavitem--active' : ''}`} onClick={() => setView('partners')}>
+            <Ico size={18} paths={<><circle cx="8" cy="8" r="3" /><circle cx="16" cy="8" r="3" /><path d="M2.5 19c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5" /><path d="M13.6 14.2c.7-.4 1.5-.7 2.4-.7 3 0 5.5 2.2 5.5 5.5" /></>} /> Partner Hunt
+          </button>
         </nav>
         <ProfileMenu user={user} onLogout={onLogout} />
       </header>
 
       <main className="v2-hmain">
-        {view === 'home' ? <Home user={user} /> : <TrainingMode onSelectSolo={onSelectSolo} />}
+        {view === 'home'
+          ? <Home user={user} />
+          : view === 'partners'
+            ? <PartnerHunt userId={user.user_id} />
+            : <TrainingMode onSelectSolo={onSelectSolo} />}
       </main>
     </div>
   )

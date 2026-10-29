@@ -71,6 +71,7 @@ def create_session_record(
     skill_level: str,
     *,
     now: datetime | None = None,
+    time_zone: str | None = None,
 ) -> dict:
     """Create one collision-safe session directory and atomically persist ``session.json``."""
     created = now or datetime.now(timezone.utc)
@@ -102,6 +103,8 @@ def create_session_record(
         "skill_level": skill_level,
         "plan": plan,
     }
+    if time_zone:
+        record["timezone"] = time_zone
     try:
         _atomic_write_json(session_dir / SESSION_FILENAME, record)
     except BaseException:

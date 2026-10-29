@@ -1,0 +1,112 @@
+{
+  "expo": {
+    "name": "Squirrel Social",
+    "slug": "squirrel-social",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "in.squirrelsocial.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0C0C0C"
+      },
+      "package": "in.squirrelsocial.app",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
+      ],
+      "blockedPermissions": [
+        "android.permission.ACTIVITY_RECOGNITION"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "squirrelsocial.life"
+            },
+            {
+              "scheme": "https",
+              "host": "squirrel-amber-sigma-virid.vercel.app"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ],
+      "versionCode": 2
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "scheme": "squirrelsocial",
+    "backgroundColor": "#060606",
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Squirrel Social uses your location to track runs and claim territory.",
+          "locationAlwaysAndWhenInUsePermission": "Squirrel Social uses your location during a run, including while the app is in the background, so your route is complete.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true,
+          "isIosBackgroundLocationEnabled": true
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Squirrel Social uses the camera to track your body so the coach can count and score your reps. No video is recorded or uploaded.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Squirrel Social uses a photo only when you choose one to share.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#D7FF1F"
+        }
+      ],
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "Squirrel Social uses motion sensors to check you really moved before a Movement Alarm switches off. Nothing is recorded or uploaded."
+        }
+      ]
+    ],
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0C0C0C"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "fc225cfd-08d7-48fc-98de-d042732eaccf"
+      }
+    },
+    "owner": "squirrel-social"
+  }
+}

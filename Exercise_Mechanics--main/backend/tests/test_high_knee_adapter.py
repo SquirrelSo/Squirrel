@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from math import pi, sin
 from copy import deepcopy
 from pathlib import Path
 
@@ -117,7 +118,7 @@ def _drive(adapter, sequence):
 
 _LEFT_FULL = [
     (0.0, 0.0, 0),
-    (0.2, 0.0, 100),
+    (0.35, 0.0, 100),
     (0.5, 0.0, 200),
     (0.8, 0.0, 300),
     (0.9, 0.0, 400),
@@ -193,8 +194,8 @@ def test_simultaneous_completions_receive_stable_left_then_right_ids():
 
 def test_shallow_and_observed_invalid_cycles_have_separate_counters():
     shallow = [
-        (0.0, 0.0, 0), (0.2, 0.0, 100), (0.5, 0.0, 200),
-        (0.6, 0.0, 300), (0.5, 0.0, 400), (0.2, 0.0, 500),
+        (0.0, 0.0, 0), (0.35, 0.0, 100), (0.5, 0.0, 200),
+        (0.6, 0.0, 300), (0.5, 0.0, 400), (0.3, 0.0, 500),
         (0.05, 0.0, 600),
     ]
     shallow_status = _drive(_adapter(), shallow)
@@ -204,8 +205,8 @@ def test_shallow_and_observed_invalid_cycles_have_separate_counters():
     assert shallow_status["cue"]["rule_id"] == "knee_drive_rom"
 
     invalid = [
-        (0.0, 0.0, 0), (0.2, 0.0, 100), (0.25, 0.0, 200),
-        (0.2, 0.0, 300), (0.15, 0.0, 400), (0.05, 0.0, 500),
+        (0.0, 0.0, 0), (0.32, 0.0, 100), (0.36, 0.0, 200),
+        (0.33, 0.0, 300), (0.28, 0.0, 400), (0.05, 0.0, 500),
     ]
     invalid_status = _drive(_adapter(), invalid)
     assert invalid_status["movement"]["invalid_lifts"] == 1
@@ -324,7 +325,7 @@ def test_knee_tracking_cue_requires_300ms_and_clears_without_amber_fallback():
     adapter = _adapter_with_penalties()
     adapter.process(_drift_frame(0.0, 0.0))
 
-    for progress, timestamp in ((0.2, 100.0), (0.5, 200.0), (0.8, 300.0)):
+    for progress, timestamp in ((0.35, 100.0), (0.5, 200.0), (0.8, 300.0)):
         transient = adapter.process(
             _drift_frame(progress, timestamp, left_x=264.0)
         )
@@ -530,3 +531,72 @@ def test_older_capture_config_without_the_monitor_remains_replayable():
     status = adapter.process(_frame(0.0, 0.0, 0.0))
     assert "left_right_asymmetry" not in adapter.active_rule_ids
     assert status["monitors"] == {}
+
+
+def _alternating_high_knees(seconds, *, frame_ms, period_ms=700.0, rest=0.0, peak=0.9):
+    """Each leg lifts once per `period_ms`, half a period after the other."""
+    from math import cos, pi
+
+    def wave(t):
+        return rest + (peak - rest) * (1 - cos(2 * pi * (t % period_ms) / period_ms)) / 2 if 0 <= t < seconds * 1000 else rest
+
+    frames, t = [], 0.0
+    while t <= seconds * 1000 + period_ms:
+        frames.append((wave(t), wave(t - period_ms / 2), t))
+        t += frame_ms
+    return frames
+
+
+def _count_lifts(sequence):
+    status = _drive(_adapter(duration=60_000), sequence)
+    return status["movement"]["counted_lifts"]
+
+
+def test_a_slow_camera_counts_every_lift():
+    # 7 s at one lift per leg every 0.7 s: 10 lifts per leg.
+    assert _count_lifts(_alternating_high_knees(7, frame_ms=100)) == 20
+
+
+def test_feet_that_barely_settle_between_lifts_still_count():
+    assert _count_lifts(_alternating_high_knees(7, frame_ms=33, rest=0.12)) == 20
+
+
+def _scaled(points: dict, scale: float, *, drop_shoulders: bool = False) -> dict:
+    """The same body as the camera sees it `scale` times as big (closer or further away)."""
+    out = {name: {**p, "x": 200.0 + (p["x"] - 200.0) * scale, "y": 550.0 + (p["y"] - 550.0) * scale} for name, p in points.items()}
+    if drop_shoulders:
+        for name in ("left_shoulder", "right_shoulder"):
+            out[name]["v"] = 0.1
+    return out
+
+
+@pytest.mark.parametrize(
+    ("scale", "drop_shoulders"),
+    [(0.75, False), (1.3, False), (1.0, True)],
+    ids=["further-than-setup", "closer-than-setup", "shoulders-out-of-frame"],
+)
+def test_high_knees_count_away_from_the_setup_spot_or_with_shoulders_hidden(scale, drop_shoulders):
+    adapter = _adapter(duration=60_000)
+    status = None
+    for left, right, t in _alternating_high_knees(5, frame_ms=33):
+        points = _scaled(_keypoints(left, right), scale, drop_shoulders=drop_shoulders)
+        status = adapter.process(TrainingFrame(t, points))
+    assert status["movement"]["counted_lifts"] == 14
+
+
+def test_a_slow_march_is_coached_and_not_counted():
+    """Field test: a slow left-right march counted as high knees."""
+    adapter = build_high_knee_adapter(baseline=_baseline(), target_duration_ms=30_000)
+    statuses, t = [], 0
+    for side in ("left", "right", "left"):
+        for step in range(0, 1600, 50):   # a 1.6 s lift: a march
+            p = 0.8 * sin(pi * step / 1600)
+            statuses.append(adapter.process(_frame(p, t, 0.0) if side == "left" else _frame(0.0, t, p)))
+            t += 50
+        for _ in range(6):
+            statuses.append(adapter.process(_frame(0.0, t, 0.0)))
+            t += 50
+    final = statuses[-1]
+    assert final["movement"]["counted_lifts"] == 0
+    assert final["movement"]["invalid_lifts"] >= 3
+    assert any(s["cue"] and s["cue"]["rule_id"] == "tempo" for s in statuses)

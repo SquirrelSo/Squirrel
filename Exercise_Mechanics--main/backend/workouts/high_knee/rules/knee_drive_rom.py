@@ -15,8 +15,13 @@ removes whole-image translation and vertical body bounce, while the live body-up
 projection invariant to rigid image rotation. Raw values stay unclamped for later FSM/replay use;
 display values alone are clamped to [0, 1].
 
-Availability is per side. A missing/low-confidence knee suppresses only that leg, but an unusable
-shared shoulder/hip frame suppresses both. A live hip-knee vector is allowed to approach zero: in
+Only the hips and knees are required live. The live gap is rescaled by live torso length over
+the baseline's, so standing closer to or further from the camera than at setup changes nothing.
+Without usable shoulders (out of frame) the image vertical is the up axis and no rescaling is
+applied: the reading carries on rather than stopping. Neither case may stop a lift from counting.
+
+Availability is per side. A missing/low-confidence knee suppresses only that leg, but unusable
+hips suppress both. A live hip-knee vector is allowed to approach zero: in
 a front view that can be a legitimate hip-height knee drive, not necessarily corrupt geometry.
 """
 
@@ -29,20 +34,17 @@ from backend.core.keypoints import reference_xy, usable_xy
 
 RULE_ID = "knee_drive_rom"
 REQUIRED_KEYPOINTS = (
-    "left_shoulder",
-    "right_shoulder",
     "left_hip",
     "right_hip",
     "left_knee",
     "right_knee",
 )
+# The setup baseline also fixes the torso scale and axis.
+BASELINE_KEYPOINTS = ("left_shoulder", "right_shoulder") + REQUIRED_KEYPOINTS
 
-_COMMON_KEYPOINTS = (
-    "left_shoulder",
-    "right_shoulder",
-    "left_hip",
-    "right_hip",
-)
+_HIP_KEYPOINTS = ("left_hip", "right_hip")
+_SHOULDER_KEYPOINTS = ("left_shoulder", "right_shoulder")
+_IMAGE_UP = (0.0, -1.0)
 _SIDES = ("left", "right")
 
 
@@ -77,7 +79,7 @@ class KneeDriveRomRule:
             if not isfinite(value) or value <= 0.0:
                 raise ValueError(f"{label} must be finite and positive, got {value}")
 
-        points = reference_xy(baseline, REQUIRED_KEYPOINTS)
+        points = reference_xy(baseline, BASELINE_KEYPOINTS)
         if points is None:
             raise ValueError(
                 "High Knee baseline requires finite shoulder, hip and knee coordinates"
@@ -87,7 +89,7 @@ class KneeDriveRomRule:
             raise ValueError(
                 "High Knee baseline torso axis is below the configured minimum length"
             )
-        up_axis = body_frame
+        up_axis, torso_length = body_frame
 
         baseline_gaps: dict[str, float] = {}
         for side in _SIDES:
@@ -103,21 +105,26 @@ class KneeDriveRomRule:
             baseline_gaps[side] = gap
 
         self._baseline_gaps = baseline_gaps
+        self._baseline_torso_length = torso_length
         self._full_rom_gate = float(full_rom_gate)
         self._min_torso_length_px = float(min_torso_length_px)
 
     def read(self, keypoints: dict) -> KneeDriveReading:
         """Read both legs, preserving independent knee availability.
 
-        A bad shared shoulder/hip frame returns an unavailable reading for both sides. Otherwise,
-        each knee is confidence-gated independently and the usable side remains available.
+        Unusable hips return an unavailable reading for both sides. Otherwise, each knee is
+        confidence-gated independently and the usable side remains available.
         """
-        common = usable_xy(keypoints, _COMMON_KEYPOINTS)
-        if common is None or not _landmarks_finite(keypoints, _COMMON_KEYPOINTS):
+        common = usable_xy(keypoints, _HIP_KEYPOINTS)
+        if common is None or not _landmarks_finite(keypoints, _HIP_KEYPOINTS):
             return _unavailable_reading()
-        up_axis = _body_frame(common, self._min_torso_length_px)
-        if up_axis is None:
-            return _unavailable_reading()
+        up_axis, scale = _IMAGE_UP, 1.0
+        shoulders = usable_xy(keypoints, _SHOULDER_KEYPOINTS)
+        if shoulders is not None and _landmarks_finite(keypoints, _SHOULDER_KEYPOINTS):
+            body_frame = _body_frame({**common, **shoulders}, self._min_torso_length_px)
+            if body_frame is not None:
+                up_axis, torso_length = body_frame
+                scale = torso_length / self._baseline_torso_length
 
         raw: dict[str, float | None] = {}
         available: dict[str, bool] = {}
@@ -131,7 +138,7 @@ class KneeDriveRomRule:
                 _subtract(common[f"{side}_hip"], knee[f"{side}_knee"]),
                 up_axis,
             )
-            progress = 1.0 - live_gap / self._baseline_gaps[side]
+            progress = 1.0 - live_gap / scale / self._baseline_gaps[side]
             if not isfinite(progress):
                 raw[side] = None
                 available[side] = False
@@ -166,14 +173,15 @@ class KneeDriveRomRule:
 def _body_frame(
     points: dict[str, tuple[float, float]],
     min_torso_length_px: float,
-) -> tuple[float, float] | None:
+) -> tuple[tuple[float, float], float] | None:
+    """The torso's up axis and length (hips to shoulders), or None below the length floor."""
     shoulder_mid = _midpoint(points["left_shoulder"], points["right_shoulder"])
     hip_mid = _midpoint(points["left_hip"], points["right_hip"])
     torso = _subtract(shoulder_mid, hip_mid)
     length = hypot(*torso)
     if not isfinite(length) or length < min_torso_length_px:
         return None
-    return (torso[0] / length, torso[1] / length)
+    return (torso[0] / length, torso[1] / length), length
 
 
 def _unavailable_reading() -> KneeDriveReading:

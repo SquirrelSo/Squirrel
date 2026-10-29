@@ -49,6 +49,8 @@ def _quality(**changes: object) -> BaselineQuality:
         "valid_coverage": 1.0,
         "valid_duration_ms": 3000.0,
         "max_joint_stddev_px": 0.0,
+        "body_scale_px": 150.0,
+        "max_joint_stddev_rel": 0.0,
         "joint_stddev_px": {
             name: {"x": 0.0, "y": 0.0} for name in _frame()
         },
@@ -150,10 +152,12 @@ def test_bent_knees_raised_foot_and_unstable_stance_have_distinct_reasons():
     bent["left_knee"]["x"] = 280.0
     bent["right_knee"]["x"] = 120.0
     raised = _frame()
-    raised["left_ankle"]["y"] = 530.0
+    raised["left_ankle"]["y"] = 510.0
     wide = _frame()
-    wide["left_ankle"]["x"] = 280.0
-    wide["right_ankle"]["x"] = 120.0
+    wide["left_ankle"]["x"] = 320.0
+    wide["right_ankle"]["x"] = 80.0
+    wide["left_knee"]["x"] = 275.0      # legs still straight, just spread wide
+    wide["right_knee"]["x"] = 125.0
 
     assert _reading(bent).reason_id == "knees_not_extended"
     assert _reading(raised).reason_id == "both_feet_not_down"
@@ -185,7 +189,7 @@ def test_baseline_validation_rejects_bad_quality_and_accepts_stable_reference():
     good = _adapter().validate_baseline(_reference(), _quality(), _TEMPLATES)
     unstable = _adapter().validate_baseline(
         _reference(),
-        _quality(max_joint_stddev_px=9.0),
+        _quality(max_joint_stddev_px=30.0, max_joint_stddev_rel=0.2),
         _TEMPLATES,
     )
     incomplete = _adapter().validate_baseline(

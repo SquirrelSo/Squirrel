@@ -38,11 +38,19 @@ data/users/*
 backend_old/users/
 backend_old/baseline/
 data/captures/
+# Moderation reports: who reported whom, and why — private, never committed
+data/moderation/
+# Squirrel Social: password hashes, refresh tokens, the dev signing key, invite tokens
+data/auth/
+data/invites/
 captures/
 recordings/
 
 # Internal planning documents — not part of the public codebase
 plans/
+
+# Pose model bundles downloaded by the local vision tools (backend/tools/live_pushup.py)
+backend/tools/.models/
 
 # Test and diagnostic output
 coverage/

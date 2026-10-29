@@ -9,6 +9,12 @@ One configuration-supplied predicate is the full-ROM authority. The same predica
 entry into the peak phase and the completed-rep verdict. ``min_rep_peak`` is a lower qualification
 boundary: rep-shaped movements below it are diagnostic invalid attempts and never advance the set.
 
+Two optional policies decide what else a rep must be to count. ``count_shallow: false`` makes a rep
+that passed ``min_rep_peak`` but missed the full-ROM gate an invalid attempt (reason ``shallow``)
+instead of a counted shallow rep. ``min_rep_ms`` is the shortest believable movement, from leaving
+the resting band to returning to it: a faster one is an invalid attempt (reason ``too_fast``). Both
+stay visible (``AttemptResult.reason`` and the not-counted counters); neither advances the set.
+
 Phase names are not fixed here. The lifecycle roles (the resting/``setup`` phase, the ``reset``
 dwell phase, the movement phases and which movement phase is the returning one) are derived from
 the configured transition graph, so a descend-first squat and an ascend-first curl share this exact
@@ -25,7 +31,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isfinite
 from numbers import Real
-from typing import Callable, Literal
+from typing import Callable, Literal, Mapping
+
+from backend.engine.cadence import FrameGapBoundary
 
 _CONDITIONS = frozenset(
     {
@@ -42,6 +50,9 @@ _ACTIONS = frozenset({"complete_attempt", "discard_attempt", "reset_attempt"})
 _EVENTS = frozenset({"attempt_completed", "attempt_discarded", "rep_cycle_completed"})
 
 AttemptClassification = Literal["invalid", "shallow", "full_rom"]
+# Why an attempt did not count: under min_rep_peak, faster than min_rep_ms, or short of the full-ROM
+# gate while shallow reps do not count.
+InvalidReason = Literal["below_min_peak", "too_fast", "shallow"]
 
 
 @dataclass(frozen=True)
@@ -52,6 +63,9 @@ class AttemptResult:
     peak: float
     qualified: bool
     classification: AttemptClassification
+    reason: InvalidReason | None = None
+    # Leaving the resting band to returning to it (ms); None when the start was not observed.
+    duration_ms: float | None = None
 
     @property
     def full_rom(self) -> bool:
@@ -128,6 +142,10 @@ class RepState:
     # actually ran, in order, since several can fire within one frame.
     conditions: dict[str, bool]
     fired_transitions: tuple[dict[str, str], ...]
+    # Invalid attempts that were full enough to be reps but did not count (included in
+    # invalid_attempt_count): short of the full-ROM gate, or too fast.
+    shallow_not_counted: int = 0
+    too_fast_count: int = 0
 
     @property
     def rep_count(self) -> int:
@@ -156,7 +174,11 @@ class RepFSM:
     """Exercise-agnostic rep FSM driven entirely by configuration-supplied boundaries.
 
     ``max_frame_delta_ms`` is shared with the evidence timeline. It distinguishes a resumable
-    tracking interruption from a long gap. No constructor tunable has a code default. The lifecycle
+    tracking interruption from a long gap, unless the exercise configures a longer
+    ``max_tracking_gap_ms`` (slow cameras, a joint hidden for a moment). When ``frame_cadence`` is
+    configured the boundary also scales with the observed frame interval (see ``engine/cadence.py``)
+    so a slow phone camera is not read as lost tracking; the larger of the two applies. No other
+    constructor tunable has a code default. The lifecycle
     roles (resting/setup phase, reset phase, movement phases and the single returning phase) are
     derived from the transition graph so no phase name is hard-coded.
     """
@@ -175,6 +197,10 @@ class RepFSM:
         reset_dwell_ms: float,
         stale_phase_ms: float,
         max_frame_delta_ms: float,
+        max_tracking_gap_ms: float | None = None,
+        count_shallow: bool = True,
+        min_rep_ms: float | None = None,
+        frame_cadence: Mapping | None = None,
     ) -> None:
         if not callable(reached_gate):
             raise ValueError("reached_gate must be callable")
@@ -200,6 +226,17 @@ class RepFSM:
         self._reset_dwell_ms = _positive(reset_dwell_ms, "reset_dwell_ms")
         self._stale_phase_ms = _positive(stale_phase_ms, "stale_phase_ms")
         self._max_frame_delta_ms = _positive(max_frame_delta_ms, "max_frame_delta_ms")
+        self._max_tracking_gap_ms = (
+            self._max_frame_delta_ms
+            if max_tracking_gap_ms is None
+            else _positive(max_tracking_gap_ms, "max_tracking_gap_ms")
+        )
+        if not isinstance(count_shallow, bool):
+            raise ValueError("count_shallow must be boolean")
+        self._count_shallow = count_shallow
+        self._min_rep_ms = None if min_rep_ms is None else _positive(min_rep_ms, "min_rep_ms")
+        # Adaptive to the camera's frame rate; the fixed max_tracking_gap_ms still applies on top.
+        self._gap_boundary = FrameGapBoundary(self._max_frame_delta_ms, frame_cadence)
         if not 0 <= self._top_return <= self._descent_trigger < self._min_rep_peak:
             raise ValueError(
                 "progress thresholds must satisfy "
@@ -211,7 +248,10 @@ class RepFSM:
         self._full_rom_count = 0
         self._shallow_count = 0
         self._invalid_attempt_count = 0
+        self._shallow_not_counted = 0
+        self._too_fast_count = 0
         self._shallow_flag = False
+        self._attempt_started_ms: float | None = None
 
         self._phase = initial_phase
         self._phase_entered_ms: float | None = None
@@ -242,6 +282,7 @@ class RepFSM:
         if self._last_seen_ms is not None and timestamp < self._last_seen_ms:
             raise ValueError("now_ms must be monotonic")
         self._last_seen_ms = timestamp
+        gap_limit_ms = max(self._max_tracking_gap_ms, self._gap_boundary.observe(timestamp))
         self._completed_attempt_event = None
         self._emitted_events = set()
         self._fired_transitions = []
@@ -252,19 +293,17 @@ class RepFSM:
 
         if self._last_tracked_ms is not None:
             gap_ms = timestamp - self._last_tracked_ms
-            gap_detected = self._tracking_paused or gap_ms > self._max_frame_delta_ms
-            if gap_detected:
-                if gap_ms > self._max_frame_delta_ms or not self._recovery_is_compatible(
-                    value.progress
+            if gap_ms > gap_limit_ms or (
+                self._tracking_paused and not self._recovery_is_compatible(value.progress)
+            ):
+                if not self._apply_configured_transition(
+                    "tracking_recovery_failed", value, timestamp
                 ):
-                    if not self._apply_configured_transition(
-                        "tracking_recovery_failed", value, timestamp
-                    ):
-                        raise RuntimeError(
-                            f"no tracking_recovery_failed transition configured for {self._phase}"
-                        )
-                else:
-                    self._shift_phase_clocks(gap_ms)
+                    raise RuntimeError(
+                        f"no tracking_recovery_failed transition configured for {self._phase}"
+                    )
+            elif self._tracking_paused:
+                self._shift_phase_clocks(gap_ms)
 
         self._tracking_paused = False
         self._last_tracked_ms = timestamp
@@ -367,9 +406,11 @@ class RepFSM:
                 "when": transition["when"],
             }
         )
+        if self._phase == self._setup_phase and transition["to"] in self._moving_phases:
+            self._attempt_started_ms = now_ms
         action = transition.get("action")
         if action == "complete_attempt":
-            self._complete_attempt()
+            self._complete_attempt(now_ms)
         elif action == "discard_attempt":
             self._reset_attempt()
         elif action == "reset_attempt":
@@ -388,13 +429,28 @@ class RepFSM:
             return False
         return now_ms - self._peak_at_ms >= self._turnaround_ms
 
-    def _complete_attempt(self) -> None:
+    def _complete_attempt(self, now_ms: float) -> None:
         self._attempt_count += 1
-        qualified = self._peak >= self._min_rep_peak
+        duration = (
+            None if self._attempt_started_ms is None else now_ms - self._attempt_started_ms
+        )
+        full = self._reached_gate(self._peak)
+        reason: InvalidReason | None = None
+        if self._peak < self._min_rep_peak:
+            reason = "below_min_peak"
+        elif self._min_rep_ms is not None and duration is not None and duration < self._min_rep_ms:
+            reason = "too_fast"
+            self._too_fast_count += 1
+        elif not full and not self._count_shallow:
+            reason = "shallow"
+            self._shallow_not_counted += 1
+            self._shallow_flag = True
+
+        qualified = reason is None
         if not qualified:
             classification: AttemptClassification = "invalid"
             self._invalid_attempt_count += 1
-        elif self._reached_gate(self._peak):
+        elif full:
             classification = "full_rom"
             self._qualified_count += 1
             self._full_rom_count += 1
@@ -410,6 +466,8 @@ class RepFSM:
             peak=round(self._peak, 6),
             qualified=qualified,
             classification=classification,
+            reason=reason,
+            duration_ms=None if duration is None else round(duration, 1),
         )
 
     def _recovery_is_compatible(self, progress: float) -> bool:
@@ -427,6 +485,7 @@ class RepFSM:
         self._peak = 0.0
         self._peak_at_ms = None
         self._setup_armed = False
+        self._attempt_started_ms = None
 
     def _shift_phase_clocks(self, gap_ms: float) -> None:
         if self._phase_entered_ms is not None:
@@ -461,6 +520,8 @@ class RepFSM:
             shallow_flag=self._shallow_flag,
             conditions=self._condition_snapshot(observation),
             fired_transitions=tuple(self._fired_transitions),
+            shallow_not_counted=self._shallow_not_counted,
+            too_fast_count=self._too_fast_count,
         )
 
     def _condition_snapshot(self, observation: RepObservation | None) -> dict[str, bool]:

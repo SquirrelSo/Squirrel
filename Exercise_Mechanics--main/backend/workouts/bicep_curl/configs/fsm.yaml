@@ -29,9 +29,23 @@ transitions:
   - {from: reset, to: reset, when: tracking_recovery_failed, action: reset_attempt}
   - {from: reset, to: setup, when: reset_dwell_elapsed, action: reset_attempt, emit: rep_cycle_completed}
 
-descent_trigger: 0.10
-top_return: 0.10
-min_rep_peak: 0.30
-turnaround_ms: 200
-reset_dwell_ms: 500
+# Progress is 0 with the arm hanging as captured and 1 with the wrist at shoulder height. A rep: a
+# wrist rises past min_rep_peak, then lowers back within top_return of the hang. The generous band
+# lets people lower without fully straightening; the short dwell lets the next rep start at once.
+descent_trigger: 0.25
+top_return: 0.25
+min_rep_peak: 0.40
+turnaround_ms: 150
+reset_dwell_ms: 100
 stale_phase_ms: 10000
+# Slow cameras (under 10 frames a second) and a joint hidden for a moment must not throw the rep
+# away; only a longer dropout does.
+max_tracking_gap_ms: 1000
+
+# What a rep must be to count toward the set (engine/rep_fsm.py). A rep short of the full-ROM gate
+# still counts, with a warning said at once, and earns no XP (only full reps are good_reps). None
+# faster than min_rep_ms counts, from leaving the resting band to returning to it: quicker than that
+# is bouncing, not a controlled rep.
+count_shallow: true
+min_rep_ms: 1000
+too_fast_cue: "Slower: that curl was too fast to count."

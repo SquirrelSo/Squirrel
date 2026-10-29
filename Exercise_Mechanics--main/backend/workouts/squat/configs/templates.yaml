@@ -8,6 +8,12 @@ scoring:
   min_active_ms: 250
   min_active_frames: 5
   max_frame_delta_ms: 100
+  # The tracking-gap boundary scales with the observed frame interval so slow phone cameras
+  # (10-15 fps) are not mistaken for lost tracking: tolerance_frames x median interval, never
+  # below max_frame_delta_ms (unchanged at ~30 fps) and never above max_gap_ms.
+  frame_cadence:
+    tolerance_frames: 3
+    max_gap_ms: 400
   cue_min_display_ms: 800
 
 templates:
@@ -88,7 +94,9 @@ templates:
     tuning_status: ready
     fault_label: "Short depth"
     active_phases: [descent, bottom, ascent]
-    required_keypoints: [left_hip, right_hip, left_knee, right_knee]
+    # Hips only: the knees are optional live (rules/depth.py), so knees at the bottom edge of the
+    # camera never stop a rep from counting.
+    required_keypoints: [left_hip, right_hip]
     issue: "The squat does not reach the intended depth."
     cue: "Go to the target depth with control."
     coaching: "You're cutting your squats short. Sit down until your hips reach at least the top of your knees, own the bottom for a beat, then drive up — full depth is where the strength is built."
