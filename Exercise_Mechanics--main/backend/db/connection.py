@@ -11,7 +11,7 @@ import psycopg
 from psycopg_pool import ConnectionPool
 
 CONNECT_TIMEOUT_S = 3  # a down database must not stall a request or a training socket for long
-POOL_MAX_SIZE = 5      # well under a Supabase session pooler's per-database limit
+POOL_MAX_SIZE = int(os.environ["DATABASE_POOL_MAX"]) if os.environ.get("DATABASE_POOL_MAX", "").strip().isdigit() else 5  # configurable via DATABASE_POOL_MAX
 POOL_WAIT_S = 5        # how long a request waits for a connection before failing (e.g. database down)
 
 

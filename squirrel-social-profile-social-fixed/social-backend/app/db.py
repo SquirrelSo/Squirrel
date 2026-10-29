@@ -6,6 +6,7 @@ through `UTCDateTime` so both backends hand back timezone-aware UTC datetimes.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from datetime import datetime, timezone
 
@@ -57,7 +58,9 @@ def make_engine(url: str) -> Engine:
         return engine
     # Small pool: the database is shared with the Exercise backend and the Run Module (Supabase's
     # session pooler caps connections), and one worker serves this service.
-    return create_engine(url, pool_pre_ping=True, pool_size=3, max_overflow=4)
+    pool_size = int(os.environ["DATABASE_POOL_MAX"]) if os.environ.get("DATABASE_POOL_MAX", "").strip().isdigit() else 3
+    max_overflow = int(os.environ["DATABASE_MAX_OVERFLOW"]) if os.environ.get("DATABASE_MAX_OVERFLOW", "").strip().isdigit() else 4
+    return create_engine(url, pool_pre_ping=True, pool_size=pool_size, max_overflow=max_overflow)
 
 
 class Database:

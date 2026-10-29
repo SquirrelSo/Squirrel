@@ -62,7 +62,7 @@ export async function bubbleRoutes(app: FastifyInstance) {
     const q = NearbyQuery.parse(req.query ?? {});
     const v = await bubbleView(user.id);
     const items = q.state ? v.items.filter((i) => i.states.includes(q.state!)) : v.items;
-    const page = paginate(items, proximityKey, q.limit, q.cursor);
+    const page = paginate(items, proximityKey, Math.min(q.limit, 20), q.cursor);
     return { items: page.items, next_cursor: page.next_cursor, in_bubble: !!v.me, hidden_reason: v.hidden_reason, as_of: new Date().toISOString() };
   });
 }
