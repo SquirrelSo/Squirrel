@@ -2,7 +2,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import '@/logic/runTracking'; // Register the background GPS task before Expo Router loads routes.
 import { useEffect, useState } from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useFonts } from 'expo-font';
 import { Anton_400Regular } from '@expo-google-fonts/anton';
@@ -48,39 +48,42 @@ export default function RootLayout() {
   // The launch splash overlays everything until the fonts are loaded and auth has restored the
   // saved session (and at least SPLASH_MIN_MS have passed, across its two screens). It stays mounted at one place in the
   // tree so its animation isn't restarted when the app mounts underneath it.
+  const isWeb = Platform.OS === 'web';
   return (
     <SafeAreaProvider>
-      <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      {loaded && (
-      <AuthProvider>
-      <AuthReady onReady={setAuthReady} />
-      <AppStateProvider>
-        <StatusBar style={statusBarStyle} />
-        <View style={{ flex: 1, backgroundColor: colors.bg }}>
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg }, animation: 'slide_from_right' }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="welcome" options={{ animation: 'fade' }} />
-            <Stack.Screen name="sign-in" options={{ animation: 'slide_from_bottom' }} />
-            <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
-            <Stack.Screen name="run" options={{ animation: 'slide_from_bottom' }} />
-            <Stack.Screen name="level-up" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
-            <Stack.Screen name="highlight/[id]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
-            <Stack.Screen name="create" options={sheet} />
-            <Stack.Screen name="exercise/select" options={sheet} />
-            <Stack.Screen name="exercise/train/[key]" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom', gestureEnabled: false }} />
-            <Stack.Screen name="city" options={sheet} />
-            <Stack.Screen name="item/[id]" options={sheet} />
-            <Stack.Screen name="compose" options={{ animation: 'slide_from_bottom' }} />
-            <Stack.Screen name="alarm/ring/[id]" options={{ presentation: 'fullScreenModal', animation: 'fade', gestureEnabled: false }} />
-            <Stack.Screen name="alarm/edit" options={{ animation: 'slide_from_bottom' }} />
-          </Stack>
-          <SocialHost />
-          <ToastHost />
+      <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: isWeb ? 'center' : undefined }}>
+        <View style={{ flex: 1, width: '100%', maxWidth: isWeb ? 480 : undefined, alignSelf: 'center', backgroundColor: colors.bg, position: 'relative' }}>
+        {loaded && (
+        <AuthProvider>
+        <AuthReady onReady={setAuthReady} />
+        <AppStateProvider>
+          <StatusBar style={statusBarStyle} />
+          <View style={{ flex: 1, backgroundColor: colors.bg }}>
+            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg }, animation: 'slide_from_right' }}>
+              <Stack.Screen name="index" />
+              <Stack.Screen name="welcome" options={{ animation: 'fade' }} />
+              <Stack.Screen name="sign-in" options={{ animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+              <Stack.Screen name="run" options={{ animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="level-up" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
+              <Stack.Screen name="highlight/[id]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
+              <Stack.Screen name="create" options={sheet} />
+              <Stack.Screen name="exercise/select" options={sheet} />
+              <Stack.Screen name="exercise/train/[key]" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom', gestureEnabled: false }} />
+              <Stack.Screen name="city" options={sheet} />
+              <Stack.Screen name="item/[id]" options={sheet} />
+              <Stack.Screen name="compose" options={{ animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="alarm/ring/[id]" options={{ presentation: 'fullScreenModal', animation: 'fade', gestureEnabled: false }} />
+              <Stack.Screen name="alarm/edit" options={{ animation: 'slide_from_bottom' }} />
+            </Stack>
+            <SocialHost />
+            <ToastHost />
+          </View>
+        </AppStateProvider>
+        </AuthProvider>
+        )}
+        <LaunchSplash ready={loaded && authReady} />
         </View>
-      </AppStateProvider>
-      </AuthProvider>
-      )}
-      <LaunchSplash ready={loaded && authReady} />
       </View>
     </SafeAreaProvider>
   );

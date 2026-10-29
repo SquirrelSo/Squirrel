@@ -17,16 +17,20 @@ const JPEG_QUALITY = 0.8;
 export type PreparedPhoto = { uri: string; thumbUri: string; width: number; height: number; bytes: number; blob: Blob; mime: 'image/jpeg' };
 
 async function render(uri: string, w: number, h: number, edge: number, compress: number) {
-  const scale = Math.min(1, edge / Math.max(w, h));
+  const width = w && w > 0 ? w : 1600;
+  const height = h && h > 0 ? h : 1600;
+  const scale = Math.min(1, edge / Math.max(width, height));
   const ctx = ImageManipulator.manipulate(uri);
-  if (scale < 1) ctx.resize(w >= h ? { width: Math.round(w * scale) } : { height: Math.round(h * scale) });
+  if (scale < 1) ctx.resize(width >= height ? { width: Math.round(width * scale) } : { height: Math.round(height * scale) });
   const ref = await ctx.renderAsync();
   return ref.saveAsync({ format: SaveFormat.JPEG, compress });
 }
 
 /** Downscale and re-encode a picked image; returns the upload blob and a small preview. */
-export async function preparePhoto(asset: { uri: string; width: number; height: number }): Promise<PreparedPhoto> {
-  const full = await render(asset.uri, asset.width, asset.height, MAX_EDGE_PX, JPEG_QUALITY);
+export async function preparePhoto(asset: { uri: string; width?: number; height?: number }): Promise<PreparedPhoto> {
+  const w = asset.width && asset.width > 0 ? asset.width : 1600;
+  const h = asset.height && asset.height > 0 ? asset.height : 1600;
+  const full = await render(asset.uri, w, h, MAX_EDGE_PX, JPEG_QUALITY);
   const thumb = await render(full.uri, full.width, full.height, THUMB_EDGE_PX, 0.7);
   const blob = await (await fetch(full.uri)).blob();
   return { uri: full.uri, thumbUri: thumb.uri, width: full.width, height: full.height, bytes: blob.size, blob, mime: 'image/jpeg' };

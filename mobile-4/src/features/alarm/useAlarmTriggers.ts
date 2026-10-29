@@ -11,11 +11,12 @@ import { AlarmService } from '@/features/alarm/AlarmService';
 
 export function useAlarmTriggers(ready: boolean) {
   useEffect(() => {
+    if (Platform.OS === 'web') return;
     void AlarmService.resync();
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
+    if (Platform.OS === 'web' || !ready) return;
     AlarmService.setFireHandler((route) => router.push(route as Href));
     return () => AlarmService.setFireHandler(null);
   }, [ready]);

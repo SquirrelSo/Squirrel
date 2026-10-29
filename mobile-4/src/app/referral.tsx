@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { shareOrCopy, copyToClipboard } from '@/logic/share';
 import { router } from 'expo-router';
 import { communityApi } from '@/api/community';
 import { SOCIAL_API_CONFIGURED } from '@/api/config';
@@ -90,7 +91,23 @@ function Invite() {
             : `${d.referrals} of ${d.referrals_to_skip} friends joined · ${left} more to skip the line`}
         </Text>
         <Text style={styles.hint}>A friend counts once they sign up with their college email and enter your code.</Text>
-        <Button label="Share invite" icon="share-variant" onPress={() => Share.share({ message }).catch(() => undefined)} style={{ marginTop: 14 }} />
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+          <Button
+            label="Copy"
+            size="md"
+            variant="secondary"
+            iconLeft="content-copy"
+            onPress={() => void copyToClipboard(d.invite_url || d.referral_code, d.invite_url ? 'Invite link' : 'Invite code', toast)}
+            style={{ flex: 1 }}
+          />
+          <Button
+            label="Share"
+            size="md"
+            iconLeft="share-variant"
+            onPress={() => void shareOrCopy({ title: 'Squirrel Social', message, url: d.invite_url, toast, copyLabel: 'Invite link' })}
+            style={{ flex: 1 }}
+          />
+        </View>
       </Card>
 
       <Card style={{ marginTop: 14 }}>

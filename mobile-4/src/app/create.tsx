@@ -1,6 +1,6 @@
 import { useLocks } from '@/components/Locked';
 import { isLocked, type Feature } from '@/data/features';
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { router, type Href } from 'expo-router';
 import { Sheet } from '@/components/Sheet';
 import { Display, Icon, PressScale, tap } from '@/components/ui';
@@ -9,7 +9,7 @@ import { colors, fonts, radius } from '@/theme';
 
 type Action = { label: string; sub: string; icon: IconName; color: string; go?: Href; locked?: Feature };
 
-const ACTIONS: Action[] = [
+const ALL_ACTIONS: Action[] = [
   { label: 'Start a run', sub: 'GPS · live stats', icon: 'run-fast', color: colors.primary, go: '/run' },
   { label: 'Start exercise', sub: 'Form-coached reps', icon: 'arm-flex', color: colors.gold, go: '/exercise/select' },
   { label: 'Movement alarm', sub: 'Move to switch it off', icon: 'alarm', color: colors.secondary, go: '/alarm' },
@@ -18,6 +18,8 @@ const ACTIONS: Action[] = [
   { label: 'Log a meal', sub: 'Healthy plate', icon: 'food-apple', color: colors.green, locked: 'mealWater' },
   { label: 'Find an event', sub: 'Join the crew', icon: 'calendar-star', color: colors.orange, go: '/events', locked: 'events' },
 ];
+
+const ACTIONS: Action[] = (Platform.OS as string) === 'web' ? ALL_ACTIONS.filter((a) => a.go !== '/alarm') : ALL_ACTIONS;
 
 const lockedAction = (a: Action) => !!a.locked && isLocked(a.locked);
 

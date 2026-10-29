@@ -204,4 +204,4 @@ export const radius = { xs: 6, sm: 10, md: 14, lg: 16, xl: 22, pill: 999 };
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 };
 
 /** Max content width so tablets/web get a centred phone-like column instead of stretched cards. */
-export const MAX_WIDTH = 560;
+export const MAX_WIDTH = Platform.OS === 'web' ? 480 : 560;

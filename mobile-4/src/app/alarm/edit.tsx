@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Platform, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { AmountPicker, ChallengePicker, TimePicker } from '@/components/alarm/AlarmParts';
-import { Button, Card, Header, Icon, Kicker, Screen } from '@/components/ui';
+import { Button, Card, EmptyState, Header, Icon, Kicker, Screen } from '@/components/ui';
 import { AlarmService, type AlarmDraft } from '@/features/alarm/AlarmService';
 import { challengeById, challengeSummary, type ChallengeId } from '@/logic/movementChallenges';
 import { useApp } from '@/state/AppState';
@@ -12,6 +12,19 @@ import { colors, fonts, radius } from '@/theme';
 const DEFAULT: AlarmDraft = { time: { hour: 7, minute: 30 }, enabled: true, challenge: 'dance', amount: 20, label: null };
 
 export default function EditAlarm() {
+  if (Platform.OS === 'web') {
+    return (
+      <Screen tabBar={false}>
+        <Header back title="Alarm" />
+        <EmptyState
+          title="Alarms are mobile-only"
+          body="Movement alarms require native mobile sensors and system permissions. Use the Squirrel app on iOS or Android."
+          action="Back home"
+          onAction={() => router.replace('/home')}
+        />
+      </Screen>
+    );
+  }
   const { id } = useLocalSearchParams<{ id?: string }>();
   const { toast } = useApp();
   const [draft, setDraft] = useState<AlarmDraft | null>(id ? null : DEFAULT);
@@ -107,7 +120,7 @@ export default function EditAlarm() {
         ) : (
           <Text style={styles.delete} onPress={() => setConfirmDelete(true)} accessibilityRole="button">Delete alarm</Text>
         ))}
-      {Platform.OS === 'web' && <Text style={styles.hint}>{AlarmService.scheduler.note}</Text>}
+      {(Platform.OS as string) === 'web' && <Text style={styles.hint}>{AlarmService.scheduler.note}</Text>}
     </Screen>
   );
 }

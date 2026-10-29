@@ -24,6 +24,16 @@ type Phase = 'loading' | 'missing' | 'wake' | 'checking' | 'permission' | 'movin
 type Setup = { challenge: string; amount: number; label: string | null };
 
 export default function AlarmRingRoute() {
+  if (Platform.OS === 'web') {
+    return (
+      <RingShell>
+        <View style={{ alignItems: 'center', gap: 14 }}>
+          <Text style={styles.checking}>Movement alarms are mobile-only and require native device sensors.</Text>
+          <Text style={styles.link} onPress={() => router.replace('/home')} accessibilityRole="button">Back to home</Text>
+        </View>
+      </RingShell>
+    );
+  }
   const params = useLocalSearchParams<{ id: string; challenge?: string; amount?: string }>();
   const practice = params.id === 'practice';
   const [setup, setSetup] = useState<Setup | null>(() => (practice ? { challenge: challengeById(params.challenge ?? 'dance').id, amount: Number(params.amount) || challengeById(params.challenge ?? 'dance').defaultAmount, label: null } : null));

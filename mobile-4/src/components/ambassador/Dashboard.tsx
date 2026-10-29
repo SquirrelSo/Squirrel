@@ -3,8 +3,8 @@
  * counts, then tasks, referrals and the ambassador leaderboard. Every number is the server's — the
  * app never adds up or awards XP.
  */
-import { Platform, Share, StyleSheet, Text, View } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
+import { StyleSheet, Text, View } from 'react-native';
+import { copyToClipboard, shareOrCopy } from '@/logic/share';
 import type { AmbassadorMe } from '@/api/ambassador';
 import { shortTime } from '@/components/campus/territoryUi';
 import { AmbassadorLeaderboard } from '@/components/ambassador/Leaderboard';
@@ -60,15 +60,8 @@ export function AmbassadorDashboard({ me }: { me: AmbassadorMe }) {
 function InviteCard({ code, url }: { code: string; url: string | null }) {
   const { toast } = useApp();
   const message = `Join me on Squirrel Social: runs, workouts and crews on campus. Use my invite code ${code}${url ? `: ${url}` : ''}`;
-  const copy = async (text: string, what: string) => {
-    try {
-      await Clipboard.setStringAsync(text);
-      toast(`${what} copied`, 'content-copy', colors.primary);
-    } catch {
-      toast('Couldn’t copy — try again', 'alert-circle-outline', colors.coral);
-    }
-  };
-  const share = () => Share.share(Platform.OS === 'ios' && url ? { message, url } : { message }).catch(() => undefined);
+  const copy = (text: string, what: string) => void copyToClipboard(text, what, toast);
+  const share = () => void shareOrCopy({ title: 'Squirrel Social Ambassador', message, url, toast, copyLabel: 'Invite link' });
   return (
     <Card style={{ marginTop: 14 }}>
       <Text style={styles.label}>Your referral code</Text>

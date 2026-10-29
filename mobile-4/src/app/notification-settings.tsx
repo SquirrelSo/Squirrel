@@ -5,7 +5,7 @@
  * Announcements (`system`) can't be turned off. Reached from the gear on the notifications list.
  */
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Switch, Text, View } from 'react-native';
+import { Platform, StyleSheet, Switch, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { errorCode, errorText } from '@/api/campus';
 import type { NotificationCategory, NotificationPreferences, NotificationPreferencesPatch } from '@/api/featureContracts';
@@ -82,7 +82,7 @@ export default function NotificationSettings() {
 
           <SectionHeader title="What reaches you" style={{ marginTop: 22 }} />
           <View style={styles.legend}>
-            <Text style={[styles.small, { flex: 1 }]}>In-app off: it doesn’t arrive at all. Push off: it’s in this list, without buzzing your phone.</Text>
+            <Text style={[styles.small, { flex: 1 }]}>{Platform.OS === 'web' ? 'In-app off: notifications don’t arrive in your in-app list.' : 'In-app off: it doesn’t arrive at all. Push off: it’s in this list, without buzzing your phone.'}</Text>
           </View>
           <View style={{ gap: 10, marginTop: 10 }}>
             {CATEGORIES.map((c) => {
@@ -102,7 +102,7 @@ export default function NotificationSettings() {
                     </View>
                   ) : (
                     <View style={styles.switches}>
-                      {(['push', 'in_app'] as const).map((channel) => (
+                      {(Platform.OS === 'web' ? (['in_app'] as const) : (['push', 'in_app'] as const)).map((channel) => (
                         <View key={channel} style={styles.switchCol}>
                           <Switch
                             value={ch[channel]}

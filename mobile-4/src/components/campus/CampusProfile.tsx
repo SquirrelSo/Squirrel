@@ -3,7 +3,7 @@
  * when their data exists, so new/removed backend fields don't break the layout.
  */
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Scene } from '@/art/Scene';
@@ -254,7 +254,7 @@ export function CampusProfileView({ userId, isMe }: { userId?: string; isMe: boo
                 detailColor={ambStatus === 'approved' ? colors.primary : ambStatus === 'rejected' ? colors.dim : ambStatus || ambUnavailable ? colors.violet : undefined}
                 onPress={() => router.push('/ambassador')}
               />
-              <LinkRow icon="alarm" label="Movement alarm" detail="No snoozing — move to switch it off" onPress={() => router.push('/alarm')} />
+              {Platform.OS !== 'web' && <LinkRow icon="alarm" label="Movement alarm" detail="No snoozing — move to switch it off" onPress={() => router.push('/alarm')} />}
               <LinkRow icon="calendar-check" label="Meetups & check-in" onPress={() => router.push('/meetups')} />
               <LinkRow icon="sword-cross" label="Challenge invites" onPress={() => router.push('/invites')} />
               <LinkRow icon="heart-multiple-outline" label="Date Mode" onPress={() => router.push('/date')} />

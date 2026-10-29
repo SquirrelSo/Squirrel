@@ -4,8 +4,8 @@
  * "Invite your workout buddy → get ready → start together → see each other's reps live."
  */
 import { useEffect, useState } from 'react';
-import { Animated, Easing, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
+import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
+import { copyToClipboard, shareOrCopy } from '@/logic/share';
 import type { PersonLite } from '@/api/campus/types';
 import { clock, MAX_PENDING_INVITES, SHARED_RACE_XP, type RaceResult, type WorkoutInvite, type WorkoutParticipant } from '@/logic/sharedWorkout';
 import { PersonAvatar } from '@/components/campus/PersonAvatar';
@@ -42,19 +42,8 @@ export function ExerciseHeader({ name, blurb, plan, icon }: { name: string; blur
 export function InvitePanel({ url, code, exerciseName }: { url: string; code: string; exerciseName: string }) {
   const { toast } = useApp();
   const message = `Work out with me on Squirrel Social — ${exerciseName}, together. Join: ${url}`;
-  const share = async () => {
-    tap();
-    try {
-      await Share.share(Platform.OS === 'ios' ? { message: `Work out with me on Squirrel Social — ${exerciseName}, together.`, url } : { message });
-    } catch {
-      // Dismissed or unsupported — Copy still works.
-    }
-  };
-  const copy = async () => {
-    tap();
-    await Clipboard.setStringAsync(url);
-    toast('Invite link copied', 'link-variant', colors.primary);
-  };
+  const share = () => { tap(); void shareOrCopy({ title: 'Squirrel Social Workout', message, url, toast, copyLabel: 'Invite link' }); };
+  const copy = () => { tap(); void copyToClipboard(url, 'Invite link', toast); };
   return (
     <View style={{ gap: 10 }}>
       <Text style={styles.label}>Invite your workout buddy</Text>

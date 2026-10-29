@@ -3,11 +3,11 @@
  * jumps, shake). Alarms live on this device; AlarmService schedules them with the platform.
  */
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Mascot } from '@/art/Mascot';
 import { AlarmCard, BigClock } from '@/components/alarm/AlarmParts';
-import { Button, Card, Display, FadeIn, Header, Icon, Kicker, Screen, SectionHeader } from '@/components/ui';
+import { Button, Card, Display, EmptyState, FadeIn, Header, Icon, Kicker, Screen, SectionHeader } from '@/components/ui';
 import { AlarmService, streakOf, type Alarm } from '@/features/alarm/AlarmService';
 import { nextFireAt, untilText } from '@/logic/alarmTime';
 import { challengeSummary } from '@/logic/movementChallenges';
@@ -15,6 +15,19 @@ import { useApp } from '@/state/AppState';
 import { alpha, colors, fonts, radius } from '@/theme';
 
 export default function AlarmsScreen() {
+  if (Platform.OS === 'web') {
+    return (
+      <Screen tabBar={false}>
+        <Header back title="Movement alarm" />
+        <EmptyState
+          title="Alarms are mobile-only"
+          body="Movement alarms require native mobile sensors and system permissions. Use the Squirrel app on iOS or Android."
+          action="Back home"
+          onAction={() => router.replace('/home')}
+        />
+      </Screen>
+    );
+  }
   const { toast } = useApp();
   const [alarms, setAlarms] = useState<Alarm[] | null>(null);
   const [streak, setStreak] = useState(0);
