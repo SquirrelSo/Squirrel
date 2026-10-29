@@ -14,12 +14,13 @@ Production hosting configuration and deployment guide for `https://www.squirrels
 This guarantees deep client-side routes (e.g. `/explore`, `/sign-in`, `/post/:id`, `/date`, `/partner-hunt`) resolve to `/index.html` on direct browser navigation without HTTP 404s.
 
 ### Content Security Policy (CSP)
-- **`connect-src`**: Strictly pinned to the active Railway services + local origins:
+- **`connect-src`**: Strictly pinned to the active Railway services, Supabase storage, and local origins:
   - Exercise Backend: `https://squirrel-exercise-production.up.railway.app`
   - Run Module: `https://squirrel-run-api-production.up.railway.app`
   - Social Service: `https://squirrel-social-production.up.railway.app`
   - Campus Service: `https://squirrel-campus-production.up.railway.app`
   - Realtime WebSocket: `wss://squirrel-campus-production.up.railway.app`
+  - Supabase Storage: `https://egtooqnjepgsmirnqgsj.supabase.co`
   - Local origins: `'self'`, `blob:`, `data:` (required for photo uploads and canvas blobs).
 - **Inline Code Justification**:
   - `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`: Required because `react-native-web` dynamically generates and injects atomic CSS style elements (`<style>`) into the DOM at runtime.
@@ -46,9 +47,6 @@ $env:EXPO_NO_TELEMETRY = "1"
 
 # Export web production bundle
 npx expo export -p web --clear
-
-# Copy hosting template into dist
-Copy-Item web-hosting/vercel.json dist/vercel.json
 ```
 
 ### Linux / macOS Bash
@@ -68,39 +66,61 @@ export EXPO_NO_TELEMETRY="1"
 
 # Export web production bundle
 npx expo export -p web --clear
-
-# Copy hosting template into dist
-cp web-hosting/vercel.json dist/vercel.json
 ```
 
 ---
 
-## 3. Deployment via Vercel CLI (No Git Linking)
+## 3. Isolated Deployment via Vercel CLI (Outside the Repository)
+
+To keep the repository clean and ensure `npx expo export --clear` never wipes your `.vercel` link credentials, deployment runs from an isolated folder outside the repo (`C:\Users\ASUS\web-deploy`).
 
 > [!CAUTION]
 > **CRITICAL PROJECT WARNING**:
+> - **NEVER** run deployment from `mobile-4/` or `dist/`.
 > - **NEVER** link to `squirrel-amber-sigma-virid` or `sqso_webapp`. That project hosts the static invite landing page and APK distribution route. Linking to it will overwrite the invite page.
-> - **NEVER** run `vercel link --yes` bare without specifying the `--project` flag.
-> - **NEVER** run `vercel link` inside the `dist/` directory (it is cleaned on every build, which destroys the `.vercel` project link). Always run `vercel link` from `mobile-4/`.
+> - **NEVER** run `vercel link --yes` bare without specifying `--project squirrel-social-web`.
 
-### Step 1: Link Project (One-Time Setup)
-From `mobile-4/` (NOT from `dist/`):
+### Step 1: Prepare the External Deployment Folder (PowerShell 5.1)
+From `mobile-4/`:
 ```powershell
+# 1. Create or ensure the deployment folder exists
+New-Item -ItemType Directory -Force -Path "C:\Users\ASUS\web-deploy"
+
+# 2. Copy the contents of dist into web-deploy
+Copy-Item -Recurse -Force dist\* "C:\Users\ASUS\web-deploy"
+
+# 3. Copy the hosting vercel.json into web-deploy
+Copy-Item -Force web-hosting\vercel.json "C:\Users\ASUS\web-deploy\vercel.json"
+```
+
+*(On Linux / macOS Bash)*:
+```bash
+mkdir -p ~/web-deploy
+cp -r dist/* ~/web-deploy/
+cp web-hosting/vercel.json ~/web-deploy/vercel.json
+```
+
+### Step 2: Link the Project (One-Time Setup in `web-deploy`)
+Switch into `C:\Users\ASUS\web-deploy`:
+```powershell
+Set-Location "C:\Users\ASUS\web-deploy"
+
 vercel link --yes --project squirrel-social-web
 ```
+
 **Verification Step**: Check the terminal output immediately after linking. Confirm that:
 1. The **Team Scope** matches your intended Vercel account / organization.
 2. The **Project Name** is strictly `squirrel-social-web`.
 
-### Step 2: Deploy Prebuilt Output
-From `mobile-4/`:
+### Step 3: Deploy to Production
+From `C:\Users\ASUS\web-deploy`:
 ```powershell
-vercel deploy dist --prod
+vercel deploy --prod --yes
 ```
 
 For non-interactive CI/CD deployment with a token:
 ```powershell
-vercel deploy dist --prod --yes --token "$env:VERCEL_TOKEN"
+vercel deploy --prod --yes --token "$env:VERCEL_TOKEN"
 ```
 
 ---
@@ -110,7 +130,7 @@ vercel deploy dist --prod --yes --token "$env:VERCEL_TOKEN"
 > [!NOTE]
 > Do NOT set `EXPO_PUBLIC_POSE_ASSETS_URL` during Phase (a) or Phase (b). Pose coach assets are only needed when shipping the browser-native camera coach in Phase (c).
 
-When Phase (c) is activated, download MediaPipe Tasks Vision (v0.10.35) into `dist/pose/` before deploying:
+When Phase (c) is activated, download MediaPipe Tasks Vision (v0.10.35) into `dist/pose/` before copying to `web-deploy`:
 
 ### Windows PowerShell 5.1
 ```powershell

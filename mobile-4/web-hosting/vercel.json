@@ -14,7 +14,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' blob: data: https://squirrel-exercise-production.up.railway.app https://squirrel-run-api-production.up.railway.app https://squirrel-social-production.up.railway.app https://squirrel-campus-production.up.railway.app wss://squirrel-campus-production.up.railway.app; worker-src 'self' blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self';"
+          "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' blob: data: https://squirrel-exercise-production.up.railway.app https://squirrel-run-api-production.up.railway.app https://squirrel-social-production.up.railway.app https://squirrel-campus-production.up.railway.app wss://squirrel-campus-production.up.railway.app https://egtooqnjepgsmirnqgsj.supabase.co; worker-src 'self' blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self';"
         },
         {
           "key": "X-Content-Type-Options",
