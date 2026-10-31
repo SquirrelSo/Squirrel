@@ -75,3 +75,26 @@ def test_media_disabled_without_storage(settings, database, run_module):
     c = TestClient(create_app(settings, database=database, run_module=run_module, storage=DisabledStorage()))
     r = c.post("/v1/media/uploads", headers=auth(new_sub()), json={"purpose": "post", "content_type": "image/jpeg", "byte_size": 10})
     assert r.status_code == 503 and r.json()["code"] == "media_unavailable"
+
+
+def test_s3_storage_presigned_url_sigv4(monkeypatch):
+    from app.config import Settings
+    from app.services.media import S3Storage
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "mock-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "mock-secret-key")
+
+    s = Settings(
+        media_bucket="user-media",
+        media_region="ap-south-1",
+        media_endpoint_url="https://egtooqnjepgsmirnqgsj.supabase.co/storage/v1/s3",
+    )
+    storage = S3Storage(s)
+    url, headers = storage.presign_put("post/test/photo.jpg", "image/jpeg", 204_800)
+
+    assert "X-Amz-Signature=" in url
+    assert "X-Amz-Credential=" in url
+    assert "AWSAccessKeyId=" not in url
+    assert headers == {"Content-Type": "image/jpeg"}
+    assert url.startswith("https://egtooqnjepgsmirnqgsj.supabase.co/storage/v1/s3/user-media/post/test/photo.jpg?")
+
