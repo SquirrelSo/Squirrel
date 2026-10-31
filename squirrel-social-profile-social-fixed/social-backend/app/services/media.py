@@ -54,10 +54,16 @@ class S3Storage:
 
     def __init__(self, settings: Settings):
         import boto3  # imported lazily: only needed when media is configured
+        from botocore.config import Config
 
         self.bucket = settings.media_bucket
         self.public_base = settings.media_public_base_url
-        self.client = boto3.client("s3", region_name=settings.media_region, endpoint_url=settings.media_endpoint_url)
+        self.client = boto3.client(
+            "s3",
+            region_name=settings.media_region,
+            endpoint_url=settings.media_endpoint_url,
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
 
     def presign_put(self, key: str, content_type: str, byte_size: int) -> tuple[str, dict[str, str]]:
         url = self.client.generate_presigned_url(
