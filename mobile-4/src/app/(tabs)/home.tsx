@@ -1,7 +1,7 @@
 import { EXERCISE_LIBRARY } from '@/data/exercises';
 import { useExerciseCatalog } from '@/hooks/useExercise';
 import { useLocks } from '@/components/Locked';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Platform, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { CampusScene } from '@/art/CampusScene';
@@ -88,20 +88,37 @@ export default function Home() {
 
       {/* Start run CTA */}
       <FadeIn index={2}>
-        <PressScale onPress={() => router.push('/run')} style={{ marginTop: 14 }} scaleTo={0.98}>
-          <SceneImage kind="run" seed={4} height={132} scrim="strong">
-            <View style={styles.runCta}>
-              <View style={{ flex: 1 }}>
-                <OverlayKicker>Run or walk</OverlayKicker>
-                <Display size={30} color={colors.onImage}>Start a run</Display>
-                <OverlaySub>Your route unlocks zones to claim</OverlaySub>
+        {Platform.OS === 'web' ? (
+          <View style={{ marginTop: 14 }}>
+            <SceneImage kind="run" seed={4} height={132} scrim="strong">
+              <View style={styles.runCta}>
+                <View style={{ flex: 1 }}>
+                  <OverlayKicker>Run or walk</OverlayKicker>
+                  <Display size={30} color={colors.onImage}>Start a run</Display>
+                  <OverlaySub>Available in the app</OverlaySub>
+                </View>
+                <View style={[styles.playBtn, { backgroundColor: alpha(colors.card, 0.85), borderWidth: 1, borderColor: colors.line }]}>
+                  <Text style={{ color: colors.onImage, fontFamily: fonts.label, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' }}>In App</Text>
+                </View>
               </View>
-              <View style={styles.playBtn}>
-                <Icon name="play" size={30} color={colors.onPrimary} />
+            </SceneImage>
+          </View>
+        ) : (
+          <PressScale onPress={() => router.push('/run')} style={{ marginTop: 14 }} scaleTo={0.98}>
+            <SceneImage kind="run" seed={4} height={132} scrim="strong">
+              <View style={styles.runCta}>
+                <View style={{ flex: 1 }}>
+                  <OverlayKicker>Run or walk</OverlayKicker>
+                  <Display size={30} color={colors.onImage}>Start a run</Display>
+                  <OverlaySub>Your route unlocks zones to claim</OverlaySub>
+                </View>
+                <View style={styles.playBtn}>
+                  <Icon name="play" size={30} color={colors.onPrimary} />
+                </View>
               </View>
-            </View>
-          </SceneImage>
-        </PressScale>
+            </SceneImage>
+          </PressScale>
+        )}
       </FadeIn>
 
       {/* Campus today — daily activity across campus (Social service) */}
@@ -192,6 +209,22 @@ function StartExercise() {
     activeExercise
       ? router.push({ pathname: '/exercise/train/[key]', params: { key: activeExercise.key, session: activeExercise.sessionId ?? '' } })
       : router.push('/exercise/select');
+  if (Platform.OS === 'web') {
+    return (
+      <View style={[styles.exRow, { opacity: 0.8 }]} accessibilityLabel="Start Exercise, available in the app">
+        <View style={[styles.exIcon, { backgroundColor: colors.cardHi }]}>
+          <Icon name="arm-flex" size={22} color={colors.dim} />
+        </View>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <RowTitle style={{ color: colors.dim }}>Start Exercise</RowTitle>
+          <RowSub>Available in the app</RowSub>
+        </View>
+        <View style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.pill, backgroundColor: colors.cardHi, borderWidth: 1, borderColor: colors.line }}>
+          <Text style={{ color: colors.dim, fontFamily: fonts.label, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' }}>In app</Text>
+        </View>
+      </View>
+    );
+  }
   return (
     <PressScale onPress={open} scaleTo={0.985} style={styles.exRow} accessibilityLabel={activeName ? `Resume ${activeName}` : 'Start Exercise'}>
       <View style={styles.exIcon}>

@@ -22,6 +22,8 @@ const ALL_ACTIONS: Action[] = [
 const ACTIONS: Action[] = (Platform.OS as string) === 'web' ? ALL_ACTIONS.filter((a) => a.go !== '/alarm') : ALL_ACTIONS;
 
 const lockedAction = (a: Action) => !!a.locked && isLocked(a.locked);
+const isWeb = Platform.OS === 'web';
+const isAppOnly = (a: Action) => isWeb && (a.go === '/run' || a.go === '/exercise/select');
 
 /** Central CREATE action sheet. Every action opens a real flow; nothing here logs fake progress. */
 export default function Create() {
@@ -35,34 +37,48 @@ export default function Create() {
         </View>
       </View>
       <View style={styles.grid}>
-        {ACTIONS.map((a) => (
-          <PressScale
-            key={a.label}
-            style={styles.action}
-            accessibilityLabel={lockedAction(a) ? `${a.label}, coming soon` : a.label}
-            onPress={() => {
-              if (lockedAction(a)) {
-                locks.notify(a.locked!);
-                return;
-              }
-              if (a.go) {
-                tap();
-                router.back();
-                router.push(a.go);
-              }
-            }}>
-            <View style={[styles.icon, lockedAction(a) ? styles.iconLocked : { backgroundColor: `${a.color}22`, borderColor: `${a.color}66` }]}>
-              <Icon name={a.icon} size={26} color={lockedAction(a) ? colors.mute : a.color} />
-              {lockedAction(a) && (
-                <View style={styles.lockBadge}>
-                  <Icon name="lock" size={11} color={colors.onPrimary} />
+        {ACTIONS.map((a) => {
+          if (isAppOnly(a)) {
+            return (
+              <View key={a.label} style={[styles.action, { opacity: 0.75 }]} accessibilityLabel={`${a.label}, available in the app`}>
+                <View style={[styles.icon, styles.iconLocked]}>
+                  <Icon name={a.icon} size={26} color={colors.dim} />
                 </View>
-              )}
-            </View>
-            <Text style={[styles.label, lockedAction(a) && { color: colors.dim }]}>{a.label}</Text>
-            <Text style={styles.actSub}>{lockedAction(a) ? 'Coming soon' : a.sub}</Text>
-          </PressScale>
-        ))}
+                <Text style={[styles.label, { color: colors.dim }]}>{a.label}</Text>
+                <Text style={[styles.actSub, { color: colors.dim }]}>Available in the app</Text>
+              </View>
+            );
+          }
+
+          return (
+            <PressScale
+              key={a.label}
+              style={styles.action}
+              accessibilityLabel={lockedAction(a) ? `${a.label}, coming soon` : a.label}
+              onPress={() => {
+                if (lockedAction(a)) {
+                  locks.notify(a.locked!);
+                  return;
+                }
+                if (a.go) {
+                  tap();
+                  router.back();
+                  router.push(a.go);
+                }
+              }}>
+              <View style={[styles.icon, lockedAction(a) ? styles.iconLocked : { backgroundColor: `${a.color}22`, borderColor: `${a.color}66` }]}>
+                <Icon name={a.icon} size={26} color={lockedAction(a) ? colors.mute : a.color} />
+                {lockedAction(a) && (
+                  <View style={styles.lockBadge}>
+                    <Icon name="lock" size={11} color={colors.onPrimary} />
+                  </View>
+                )}
+              </View>
+              <Text style={[styles.label, lockedAction(a) && { color: colors.dim }]}>{a.label}</Text>
+              <Text style={styles.actSub}>{lockedAction(a) ? 'Coming soon' : a.sub}</Text>
+            </PressScale>
+          );
+        })}
       </View>
     </Sheet>
   );

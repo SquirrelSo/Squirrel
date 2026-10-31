@@ -3,7 +3,7 @@
  * Defend actions the backend currently allows. Used in the map's bottom panel and /zone/[id].
  */
 import { useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { campusApi, type ZoneDetail } from '@/api/campus';
 import { isPlaceholderZone } from '@/api/campus/campusShapes';
@@ -127,7 +127,13 @@ export function ZonePanel({ zoneId, meId, showOpen = false }: { zoneId: string; 
         </View>
       )}
       {rel !== 'mine' && !a.claim.allowed && !a.steal.allowed && (
-        <Button label="Start a run to earn it" iconLeft="run-fast" variant="secondary" size="sm" onPress={() => router.push('/run')} />
+        Platform.OS === 'web' ? (
+          <View style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.md, backgroundColor: colors.cardHi, borderWidth: 1, borderColor: colors.line, alignItems: 'center' }}>
+            <Text style={{ color: colors.dim, fontFamily: fonts.label, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' }}>Available in the app</Text>
+          </View>
+        ) : (
+          <Button label="Start a run to earn it" iconLeft="run-fast" variant="secondary" size="sm" onPress={() => router.push('/run')} />
+        )
       )}
 
       {/* History */}

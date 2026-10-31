@@ -74,30 +74,57 @@ npx expo export -p web --clear
 
 To keep the repository clean and ensure `npx expo export --clear` never wipes your `.vercel` link credentials, deployment runs from an isolated folder outside the repo (`C:\Users\ASUS\web-deploy`).
 
+### Why `prepare-deploy.ps1` is Required (Vercel Skips `node_modules`)
+
+When Expo exports web assets (`npx expo export -p web`), bundled assets originating from npm packages (such as `@expo/vector-icons`, `@expo-google-fonts/*`, and `expo-router`) are emitted into `dist/assets/node_modules/...`.
+
+During deployment, **Vercel's CLI and deployment pipeline automatically ignore and drop any folder named `node_modules`** (treating it as build dependency scratch rather than static output). As a result, all font files, icon glyphs, and navigation assets inside `dist/assets/node_modules` return HTTP 404 when hosted on Vercel.
+
+The [`prepare-deploy.ps1`](./prepare-deploy.ps1) script automates this preparation:
+1. **Relocates assets**: Renames `dist/assets/node_modules` to `dist/assets/vendor`.
+2. **Rewrites bundle paths**: Patches every `.js`, `.html`, and `.json` file in `dist` to replace `"assets/node_modules"` with `"assets/vendor"` using UTF-8 without BOM.
+3. **Isolates external deploy target**: Clears `C:\Users\ASUS\web-deploy` while preserving `.vercel` credentials.
+4. **Stages build artifacts**: Copies `dist/*` and `web-hosting/vercel.json` into `C:\Users\ASUS\web-deploy`.
+5. **Asserts compliance**: Verifies that 0 references to `assets/node_modules` remain in the deployment bundle.
+
 > [!CAUTION]
 > **CRITICAL PROJECT WARNING**:
 > - **NEVER** run deployment from `mobile-4/` or `dist/`.
 > - **NEVER** link to `squirrel-amber-sigma-virid` or `sqso_webapp`. That project hosts the static invite landing page and APK distribution route. Linking to it will overwrite the invite page.
 > - **NEVER** run `vercel link --yes` bare without specifying `--project squirrel-social-web`.
 
-### Step 1: Prepare the External Deployment Folder (PowerShell 5.1)
+### Step 1: Prepare the External Deployment Folder
+
 From `mobile-4/`:
+
+#### Windows PowerShell 5.1
 ```powershell
-# 1. Create or ensure the deployment folder exists
-New-Item -ItemType Directory -Force -Path "C:\Users\ASUS\web-deploy"
-
-# 2. Copy the contents of dist into web-deploy
-Copy-Item -Recurse -Force dist\* "C:\Users\ASUS\web-deploy"
-
-# 3. Copy the hosting vercel.json into web-deploy
-Copy-Item -Force web-hosting\vercel.json "C:\Users\ASUS\web-deploy\vercel.json"
+.\web-hosting\prepare-deploy.ps1
 ```
 
 *(On Linux / macOS Bash)*:
 ```bash
+# 1. Rename node_modules assets to vendor
+if [ -d "dist/assets/node_modules" ]; then
+  rm -rf dist/assets/vendor
+  mv dist/assets/node_modules dist/assets/vendor
+fi
+
+# 2. Patch references in bundle files
+find dist -type f \( -name "*.js" -o -name "*.html" -o -name "*.json" \) -exec sed -i 's|assets/node_modules|assets/vendor|g' {} +
+
+# 3. Clear deploy directory preserving .vercel
 mkdir -p ~/web-deploy
+find ~/web-deploy -mindepth 1 -not -name '.vercel*' -delete
+
+# 4. Copy dist contents and vercel.json
 cp -r dist/* ~/web-deploy/
 cp web-hosting/vercel.json ~/web-deploy/vercel.json
+
+# 5. Assert no remaining references
+if grep -r "assets/node_modules" ~/web-deploy/; then
+  echo "Error: assets/node_modules still referenced!" >&2; exit 1
+fi
 ```
 
 ### Step 2: Link the Project (One-Time Setup in `web-deploy`)

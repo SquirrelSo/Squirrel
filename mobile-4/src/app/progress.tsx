@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { PROGRESS_READS_CONFIGURED, progressApi, progressReadsLive, type LifetimeProgress, type ProgressHistory, type WeeklyProgress, } from '@/api/progress';
 import { campusApi } from '@/api/campus';
@@ -387,7 +387,13 @@ function NextAction({ icon, title, sub, cta, onPress }: { icon: React.ComponentP
           <Text style={styles.sub}>{sub}</Text>
         </View>
       </View>
-      <Button label={cta} icon="arrow-right" size="md" onPress={onPress} style={{ marginTop: 14 }} />
+      {Platform.OS === 'web' && (cta === 'Start a run' || cta === 'Start exercise') ? (
+        <View style={{ marginTop: 14, paddingVertical: 10, paddingHorizontal: 16, borderRadius: radius.md, backgroundColor: colors.cardHi, borderWidth: 1, borderColor: colors.line, alignItems: 'center' }}>
+          <Text style={{ color: colors.dim, fontFamily: fonts.labelBold, fontSize: 13, letterSpacing: 0.8, textTransform: 'uppercase' }}>Available in the app</Text>
+        </View>
+      ) : (
+        <Button label={cta} icon="arrow-right" size="md" onPress={onPress} style={{ marginTop: 14 }} />
+      )}
     </View>
   );
 }

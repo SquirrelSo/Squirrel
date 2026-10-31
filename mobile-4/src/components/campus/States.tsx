@@ -1,4 +1,4 @@
-import { ActivityIndicator, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { router } from 'expo-router';
 import { Mascot } from '@/art/Mascot';
 import { CAMPUS_SOURCE, CAPABILITY_LABEL, errorKind, errorText, featureUnavailable, isEndpointUnavailable } from '@/api/campus';
@@ -108,7 +108,13 @@ export function EmptyNote({ icon = 'emoticon-cool-outline', title, body, action,
       <Icon name={icon} size={28} color={colors.dim} />
       <Text style={styles.title}>{title}</Text>
       {body ? <Text style={styles.body}>{body}</Text> : null}
-      {action && onAction ? <Button label={action} size="sm" variant="secondary" onPress={onAction} style={styles.btn} /> : null}
+      {Platform.OS === 'web' && (action === 'Start a run' || action === 'Start exercise') ? (
+        <View style={{ marginTop: 8, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.pill, backgroundColor: colors.cardHi, borderWidth: 1, borderColor: colors.line }}>
+          <Text style={{ color: colors.dim, fontFamily: fonts.label, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' }}>Available in the app</Text>
+        </View>
+      ) : action && onAction ? (
+        <Button label={action} size="sm" variant="secondary" onPress={onAction} style={styles.btn} />
+      ) : null}
     </Card>
   );
 }
