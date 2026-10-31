@@ -25,6 +25,9 @@ from backend.workouts.bicep_curl.replay_analysis import (
 from backend.workouts.squat.adapter import build_squat_adapter
 from backend.workouts.squat.replay_analysis import analyze_squat_signals, load_rep_labels
 
+# Synthetic reps here are faster and shallower than the live counting policy accepts (conftest).
+pytestmark = pytest.mark.usefixtures("legacy_rep_counting")
+
 
 _FULL_REP = (
     (0.0, 0),
@@ -433,8 +436,8 @@ def test_capture_records_the_person_specific_signal_reference(tmp_path):
     assert reference["lateral_torso_lean"] == {"baseline_angle_deg": 0.0}
 
 
-def test_per_arm_peaks_name_the_limiting_arm_of_a_shallow_rep(tmp_path):
-    """min(left, right) says a rep was shallow; only the per-arm peaks say which arm caused it."""
+def test_per_arm_peaks_name_the_arm_that_curled_less(tmp_path):
+    """The rep follows the leading arm; only the per-arm peaks say which arm curled less."""
     set_dir = tmp_path / "set_1"
     baseline = {
         name: {axis: value for axis, value in point.items() if axis != "v"}
@@ -458,7 +461,7 @@ def test_per_arm_peaks_name_the_limiting_arm_of_a_shallow_rep(tmp_path):
         writer.record(frame, adapter.process(frame), adapter.debug_snapshot())
 
     score = json.loads((set_dir / "rep_1/form_score.json").read_text(encoding="utf-8"))
-    assert score["last_attempt"]["classification"] == "shallow"
+    assert score["last_attempt"]["classification"] == "full_rom"
     assert score["last_attempt"]["arm_peaks"] == {"left": 0.95, "right": 0.7}
     # ...and it surfaces in the generic rep summary the CLI prints.
     reps = summarize_reps(load_replay_capture(set_dir))

@@ -34,6 +34,16 @@ _FSM_RUNTIME_KEYS = (
     "stale_phase_ms",
 )
 _FSM_ALL_KEYS = _FSM_RUNTIME_KEYS
+# Optional: how long tracking may drop out (slow camera frames, a joint briefly hidden) before an
+# attempt in progress is discarded. Without it the scoring frame gap (max_frame_delta_ms) applies.
+_FSM_OPTIONAL_KEYS = ("max_tracking_gap_ms",)
+# Optional, rep exercises: whether a rep short of the full-ROM gate still counts (default true),
+# the shortest believable rep (ms, leaving the resting band to returning to it) and the cue shown
+# when a rep was faster than that.
+_REP_FSM_OPTIONAL_KEYS = ("count_shallow", "min_rep_ms", "too_fast_cue")
+# Optional, timed lifts: the slowest lift that still counts (ms, leaving the standing band to
+# returning to it) and the cue shown when a lift was slower.
+_TIMED_FSM_OPTIONAL_KEYS = ("max_lift_ms", "too_slow_cue")
 _TIMED_FSM_KEYS = (
     "phases",
     "initial_phase",
@@ -69,7 +79,7 @@ _CAPTURE_KEYS = (
     "min_valid_coverage",
     "invalid_pause_ms",
     "invalid_reset_ms",
-    "max_joint_stddev_px",
+    "max_joint_stddev_torso",
 )
 
 
@@ -142,7 +152,29 @@ def _validate_templates(
     min_frames = _number(scoring.get("min_active_frames"), "scoring.min_active_frames", minimum=1)
     if not min_frames.is_integer():
         raise ConfigurationError("scoring.min_active_frames must be an integer")
-    _number(scoring.get("max_frame_delta_ms"), "scoring.max_frame_delta_ms", minimum=0, strict=True)
+    max_delta = _number(
+        scoring.get("max_frame_delta_ms"), "scoring.max_frame_delta_ms", minimum=0, strict=True
+    )
+    # Optional: older captured configurations predate it and replay with the fixed boundary.
+    if "frame_cadence" in scoring:
+        cadence = _mapping(scoring.get("frame_cadence"), "scoring.frame_cadence")
+        if set(cadence) != {"tolerance_frames", "max_gap_ms"}:
+            raise ConfigurationError(
+                "scoring.frame_cadence must define exactly tolerance_frames and max_gap_ms"
+            )
+        _number(
+            cadence.get("tolerance_frames"),
+            "scoring.frame_cadence.tolerance_frames",
+            minimum=0,
+            strict=True,
+        )
+        ceiling = _number(
+            cadence.get("max_gap_ms"), "scoring.frame_cadence.max_gap_ms", minimum=0, strict=True
+        )
+        if ceiling < max_delta:
+            raise ConfigurationError(
+                "scoring.frame_cadence.max_gap_ms must be >= scoring.max_frame_delta_ms"
+            )
     _number(scoring.get("cue_min_display_ms"), "scoring.cue_min_display_ms", minimum=0)
 
     landmarks = set(ALL_LANDMARKS)
@@ -793,7 +825,11 @@ def _validate_fsm(raw: dict) -> dict:
     if movement_type not in {"reps", "time"}:
         raise ConfigurationError("fsm.movement_type must be 'reps' or 'time'")
     keys = _FSM_ALL_KEYS if movement_type == "reps" else _TIMED_FSM_KEYS
-    allowed = {"schema_version", "movement_type", *keys}
+    optional = (
+        *_FSM_OPTIONAL_KEYS,
+        *(_REP_FSM_OPTIONAL_KEYS if movement_type == "reps" else _TIMED_FSM_OPTIONAL_KEYS),
+    )
+    allowed = {"schema_version", "movement_type", *keys, *optional}
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise ConfigurationError(f"fsm contains unknown fields: {unknown}")
@@ -809,6 +845,23 @@ def _validate_fsm(raw: dict) -> dict:
             "movement_start", "min_lift_peak",
         }
         _number(raw.get(key), f"fsm.{key}", minimum=minimum, strict=strict)
+    for key in _FSM_OPTIONAL_KEYS:
+        if key in raw:
+            _number(raw[key], f"fsm.{key}", minimum=0, strict=True)
+    if "count_shallow" in raw and not isinstance(raw["count_shallow"], bool):
+        raise ConfigurationError("fsm.count_shallow must be boolean")
+    if "min_rep_ms" in raw:
+        _number(raw["min_rep_ms"], "fsm.min_rep_ms", minimum=0, strict=True)
+        if not isinstance(raw.get("too_fast_cue"), str) or not raw["too_fast_cue"].strip():
+            raise ConfigurationError("fsm.min_rep_ms needs a non-empty fsm.too_fast_cue")
+    elif "too_fast_cue" in raw:
+        raise ConfigurationError("fsm.too_fast_cue is only used with fsm.min_rep_ms")
+    if "max_lift_ms" in raw:
+        _number(raw["max_lift_ms"], "fsm.max_lift_ms", minimum=0, strict=True)
+        if not isinstance(raw.get("too_slow_cue"), str) or not raw["too_slow_cue"].strip():
+            raise ConfigurationError("fsm.max_lift_ms needs a non-empty fsm.too_slow_cue")
+    elif "too_slow_cue" in raw:
+        raise ConfigurationError("fsm.too_slow_cue is only used with fsm.max_lift_ms")
     if movement_type == "reps":
         reset = float(raw["top_return"])
         start = float(raw["descent_trigger"])
@@ -936,16 +989,27 @@ def _validate_setup(raw: dict, slug: str) -> dict:
     if raw.get("exercise") != slug:
         raise ConfigurationError(f"setup.exercise must equal '{slug}'")
     keypoints = raw.get("keypoints")
+    # Optional: joints needed on ONE side only, by base name (a side-on exercise).
+    either_side = raw.get("either_side", [])
+    if (
+        not isinstance(either_side, list)
+        or any(not isinstance(base, str) for base in either_side)
+        or len(set(either_side)) != len(either_side)
+    ):
+        raise ConfigurationError("setup.either_side must be a unique list of joint names")
+    side_names = [f"{side}_{base}" for base in either_side for side in ("left", "right")]
     if (
         not isinstance(keypoints, list)
-        or not keypoints
+        or not (keypoints or either_side)
         or any(not isinstance(name, str) for name in keypoints)
         or len(set(keypoints)) != len(keypoints)
     ):
-        raise ConfigurationError("setup.keypoints must be a unique non-empty list")
-    unknown = [name for name in keypoints if name not in set(ALL_LANDMARKS)]
+        raise ConfigurationError("setup.keypoints must be a unique list, non-empty without either_side")
+    unknown = [name for name in (*keypoints, *side_names) if name not in set(ALL_LANDMARKS)]
     if unknown:
         raise ConfigurationError(f"setup has unknown keypoints: {unknown}")
+    if set(keypoints) & set(side_names):
+        raise ConfigurationError("setup.keypoints and setup.either_side overlap")
     pre_check = _mapping(raw.get("pre_check"), "setup.pre_check")
     if not isinstance(pre_check.get("enabled"), bool):
         raise ConfigurationError("setup.pre_check.enabled must be boolean")
@@ -977,7 +1041,9 @@ def _validate_setup(raw: dict, slug: str) -> dict:
     reset = _number(capture["invalid_reset_ms"], "capture.invalid_reset_ms", minimum=0)
     if reset < pause:
         raise ConfigurationError("capture.invalid_reset_ms must be >= invalid_pause_ms")
-    _number(capture["max_joint_stddev_px"], "capture.max_joint_stddev_px", minimum=0, strict=True)
+    stillness = _number(capture["max_joint_stddev_torso"], "capture.max_joint_stddev_torso", minimum=0, strict=True)
+    if stillness >= 1:
+        raise ConfigurationError("capture.max_joint_stddev_torso is a fraction of a torso length and must be < 1")
     return raw
 
 
@@ -1002,7 +1068,10 @@ def _validate_setup_context_alignment(
             "baseline_capture condition templates require setup.baseline.required to be true"
         )
 
-    setup_keypoints = set(setup["keypoints"])
+    # Joints needed on one side only are captured for both sides (either may be the one in view).
+    setup_keypoints = set(setup["keypoints"]) | {
+        f"{side}_{base}" for base in setup.get("either_side", []) for side in ("left", "right")
+    }
     for context in ("pre_check", "baseline_capture"):
         required = {
             keypoint
@@ -1086,4 +1155,6 @@ def fsm_params(slug: str) -> dict:
         raise ConfigurationError("fsm_params is available only for repetition FSMs")
     params = {key: spec[key] for key in _FSM_RUNTIME_KEYS}
     params["max_frame_delta_ms"] = scoring_params(slug)["max_frame_delta_ms"]
+    params.update({key: spec[key] for key in _FSM_OPTIONAL_KEYS if key in spec})
+    params["frame_cadence"] = scoring_params(slug).get("frame_cadence")
     return params

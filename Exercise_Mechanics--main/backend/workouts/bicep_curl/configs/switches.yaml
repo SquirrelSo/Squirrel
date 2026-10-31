@@ -10,7 +10,8 @@ contexts:
     lateral_torso_lean: false
     shoulder_elevation: false
     curl_rom: false
-    stance_width: true
+    # Off: where the feet are has no bearing on a curl, and feet together blocked the set.
+    stance_width: false
     arms_extended: true
 
   baseline_capture:

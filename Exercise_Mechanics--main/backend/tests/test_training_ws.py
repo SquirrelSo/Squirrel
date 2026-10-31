@@ -9,10 +9,14 @@ import pytest
 from fastapi import WebSocketDisconnect
 
 from backend import config
+from backend.auth import tokens
 from backend.sessions.store import create_session_record
 from backend.training.debug_capture import TrainingDebugCapture
 from backend.training.router import train_ws
 from backend.users.store import create_user_record
+
+# Synthetic reps here are faster and shallower than the live counting policy accepts (conftest).
+pytestmark = pytest.mark.usefixtures("legacy_rep_counting")
 
 _PROFILE = {
     "first_name": "Training",
@@ -105,6 +109,7 @@ def persisted_session(tmp_path, monkeypatch):
 def _query(user_id: str, session_id: str, *, exercise: str = "squat", set_no: str = "1"):
     return {
         "user_id": user_id,
+        "token": tokens.issue_access_token(user_id)[0],
         "session_id": session_id,
         "exercise": exercise,
         "set_no": set_no,
@@ -168,6 +173,7 @@ def test_persisted_training_socket_streams_versioned_scored_full_rep(persisted_s
         "full_rom": 1,
         "shallow": 0,
         "invalid": 0,
+        "not_counted": {"shallow": 0, "too_fast": 0},
     }
     assert final["last_rep"]["score"] == 100.0
     assert final["score_coverage"]["reliable"] is True
@@ -271,7 +277,7 @@ def test_debug_persistence_failure_is_reported_and_closes_with_server_error(
 
 def test_missing_session_uses_stable_session_required_error():
     websocket = FakeWebSocket(
-        {"user_id": "some-user", "exercise": "squat", "set_no": "1"}
+        {"user_id": "some-user", "token": tokens.issue_access_token("some-user")[0], "exercise": "squat", "set_no": "1"}
     )
     _run(websocket)
     assert websocket.sent[0]["data"]["code"] == "SESSION_REQUIRED"
@@ -298,3 +304,13 @@ def test_invalid_training_identity_uses_stable_error_codes(
     _run(websocket)
     assert websocket.sent[0]["data"]["code"] == expected
     assert websocket.closed == (1008, expected)
+
+
+@pytest.mark.parametrize("token_for", [None, "someone-else"])
+def test_training_socket_needs_the_users_own_token(persisted_session, token_for):
+    user_id, session_id = persisted_session
+    query = {**_query(user_id, session_id), "token": tokens.issue_access_token(token_for)[0] if token_for else ""}
+    websocket = FakeWebSocket(query)
+    _run(websocket)
+    assert websocket.sent[0]["data"]["code"] == "UNAUTHORIZED"
+    assert websocket.closed == (1008, "UNAUTHORIZED")

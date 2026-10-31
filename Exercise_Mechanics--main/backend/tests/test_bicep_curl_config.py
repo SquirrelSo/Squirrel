@@ -74,14 +74,16 @@ def test_real_bicep_curl_bundle_validates_and_exposes_decisions():
     assert rom["scoring"]["role"] == "rom" and rom["scoring"]["mode"] == "rom"
     assert rom["target_offset"] == 0.0 and rom["min_upper_arm_px"] == 30
     assert rom["tuning_status"] == "development"  # corrected body-relative signal needs a rig
-    assert {"left_hip", "right_hip"}.issubset(rom["required_keypoints"])
+    # Shoulders only: the hips are often out of frame when curling close to the camera.
+    assert rom["required_keypoints"] == ["left_shoulder", "right_shoulder"]
     assert rom["full_rom_gate"] == 0.75
     assert rom["active_phases"] == ["ascent", "top", "descent"]
     # Stance and arms-extended run ONLY in the pre-check gate: not during the baseline capture
     # (which records keypoints + per-joint median only) and never live.
     assert bundle.templates["stance_width"]["scoring"] == {"role": "monitor"}
     assert bundle.templates["arms_extended"]["setup_policy"]["min_elbow_extension_deg"] == 150
-    assert bundle.contexts["pre_check"]["stance_width"] is True
+    # Feet position has no bearing on a curl: the stance check is off, only the arms are checked.
+    assert bundle.contexts["pre_check"]["stance_width"] is False
     assert bundle.contexts["pre_check"]["arms_extended"] is True
     for setup_only in ("stance_width", "arms_extended"):
         assert bundle.contexts["baseline_capture"][setup_only] is False
@@ -123,7 +125,7 @@ def test_baseline_capture_records_median_without_condition_templates(tmp_path):
     setup = build_setup_config(bundle)
     assert setup.baseline_capture_templates == ()
     assert setup.baseline_required is True
-    assert setup.pre_check_templates == ("stance_width", "arms_extended")
+    assert setup.pre_check_templates == ("arms_extended",)
 
 
 def test_capture_condition_without_required_baseline_rejected(tmp_path):

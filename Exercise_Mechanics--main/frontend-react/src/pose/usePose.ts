@@ -1,7 +1,8 @@
 /* usePose.ts — MediaPipe PoseLandmarker: camera + 33 landmarks + per-frame keypoint send.
    Ported from the original FitSync vanilla-JS MediaPipe wiring (model URLs, landmark
-   names, rounding, visibility gating) so the backend receives the IDENTICAL { t_ms, keypoints }
-   frames it already expects — calibration + rep counting behave exactly as before.
+   names, rounding, visibility gating) so the backend receives the { t_ms, keypoints } frames it
+   already expects. Keypoints are in a canonical pixel space (long side 1280, see
+   frameGeometry.ts): identical to before on a 1280×720 camera, resolution-independent elsewhere.
 
    The hook is data-source-only: it surfaces live landmarks via onFrame and pushes keypoints
    through the provided send() each frame. It does not render.
@@ -15,13 +16,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 import type { Landmark } from '../types'
-// MediaPipe BlazePose 33-landmark names (index order) — matches the backend's expectation.
-// Single source shared with the F2 visibility gate (see pose/landmarks.ts).
-import { LANDMARK_NAMES } from './landmarks'
 import { PoseFilter } from './oneEuro'
 // Model variant (lite/full/heavy) + delegate (GPU/CPU) are selectable for benchmarking
 // via ?model= / ?delegate= or localStorage — see poseModel.ts. Drop-in: identical output.
-import { resolvePoseModelConfig, benchEnabled } from './poseModel'
+import { resolvePoseModelConfig, benchEnabled, wasmFilesFor } from './poseModel'
+// Resolution-independent keypoint space (see frameGeometry.ts) + phone-friendly camera acquisition.
+import { toCanonicalKeypoints, type Keypoint } from './frameGeometry'
+import { acquireCameraStream, isPortraitViewport } from './camera'
+// Low-light preprocessing (denoise + gain on dark frames only) — see lowLight.ts for the evidence.
+import { LowLightPreprocessor, type LightingState } from './lowLight'
 
 // ── PoseLandmarker singleton (load once, reuse for every inference) ───────────────────────
 // The lite model + WASM are fetched and the GPU landmarker is created exactly ONCE per page
@@ -39,7 +42,10 @@ function getPoseLandmarker(): Promise<PoseLandmarker> {
   if (!landmarkerPromise) {
     landmarkerPromise = (async () => {
       const cfg = resolvePoseModelConfig()
-      const vision = await FilesetResolver.forVisionTasks(cfg.wasmUrl)
+      // WASM comes from the installed @mediapipe/tasks-vision package (same release as the JS
+      // API), picking the no-SIMD build on browsers without WASM SIMD (older Android WebViews).
+      const simd = await FilesetResolver.isSimdSupported()
+      const vision = wasmFilesFor(simd)
       const build = (delegate: 'GPU' | 'CPU') => PoseLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: cfg.modelUrl, delegate },
         runningMode: 'VIDEO',
@@ -48,7 +54,7 @@ function getPoseLandmarker(): Promise<PoseLandmarker> {
       let lm: PoseLandmarker
       try {
         lm = await build(cfg.delegate)
-        console.info(`[pose] model='${cfg.complexity}' delegate='${cfg.delegate}'`)
+        console.info(`[pose] model='${cfg.complexity}' delegate='${cfg.delegate}' wasm='${simd ? 'simd' : 'nosimd'}'`)
       } catch (e) {
         // Automatic fallback: a device without working WebGL (no/blocked GPU) would
         // otherwise fail to start. Retry on CPU (WASM) so pose still runs. Only
@@ -69,7 +75,7 @@ function getPoseLandmarker(): Promise<PoseLandmarker> {
 // z is MediaPipe's depth estimate (roughly the same normalized scale as x; smaller =
 // closer to camera). Saved to disk for the per-frame keypoint record; NOT used by the
 // frontal-plane rules (the backend ignores z in analysis — see the no-z constraint).
-export type Keypoint = { x: number; y: number; z: number; v: number }
+export type { Keypoint }
 export type FrameMessage = { t_ms: number; keypoints: Record<string, Keypoint> }
 
 // P1-I: model and camera lifecycles are SEPARATE state, not one shared `status`.
@@ -118,6 +124,8 @@ export function usePose({ onFrame, send, poseActive, sendActive, paused }: UsePo
   const [permission, setPermission] = useState<CameraPermission>('required')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [retryNonce, setRetryNonce] = useState(0) // bump to re-attempt camera acquisition
+  // Scene lighting as seen by the detector: 'low' = being enhanced, 'too_dark' = ask for light.
+  const [lighting, setLighting] = useState<LightingState>('ok')
 
   // keep latest callbacks / flags without restarting the detection loop
   const onFrameRef = useRef(onFrame); onFrameRef.current = onFrame
@@ -185,18 +193,13 @@ export function usePose({ onFrame, send, poseActive, sendActive, paused }: UsePo
 
     const sendKeypoints = (landmarks: Landmark[] | null, video: HTMLVideoElement) => {
       if (!sendActiveRef.current) return // P0-C: detection runs, transmission gated
-      const keypoints: Record<string, Keypoint> = {}
+      let keypoints: Record<string, Keypoint> = {}
       if (landmarks) {
-        landmarks.forEach((lm, i) => {
-          // RAW / un-mirrored on purpose — see the MIRRORING CONTRACT note at top.
-          // z uses MediaPipe's x-scale convention, so we pixel-scale it by videoWidth too.
-          keypoints[LANDMARK_NAMES[i]] = {
-            x: Math.round(lm.x * video.videoWidth),
-            y: Math.round(lm.y * video.videoHeight),
-            z: Math.round((lm.z ?? 0) * video.videoWidth),
-            v: Number((lm.visibility ?? 1.0).toFixed(3)),
-          }
-        })
+        // RAW / un-mirrored on purpose — see the MIRRORING CONTRACT note at top. Mapped to the
+        // canonical (resolution-independent) pixel space the backend thresholds are defined in.
+        const canonical = toCanonicalKeypoints(landmarks, video.videoWidth, video.videoHeight)
+        if (!canonical) return // video size not known yet — never send a collapsed pose
+        keypoints = canonical
       }
       sendRef.current({ t_ms: logicalNow(), keypoints })
     }
@@ -205,6 +208,10 @@ export function usePose({ onFrame, send, poseActive, sendActive, paused }: UsePo
     // and the keypoints sent to the backend (single jitter-filtered signal; the backend depth
     // EMA was removed to avoid double-smoothing). Persists across frames; reset on dropout.
     const poseFilter = new PoseFilter()
+
+    // Dark frames from weak cameras are denoised + brightened before detection (same geometry).
+    const lowLight = new LowLightPreprocessor()
+    let lastLighting: LightingState = 'ok'
 
     // Opt-in profiler (?posebench=1): rolling avg/max of detectForVideo, flushed every ~2s.
     const bench = benchEnabled()
@@ -216,7 +223,10 @@ export function usePose({ onFrame, send, poseActive, sendActive, paused }: UsePo
       if (video && lm && video.currentTime !== lastVideoTimeRef.current) {
         lastVideoTimeRef.current = video.currentTime
         const t0 = bench ? performance.now() : 0
-        const result = lm.detectForVideo(video, performance.now())
+        const now = performance.now()
+        const result = lm.detectForVideo(lowLight.source(video, now), now)
+        const lightingNow = lowLight.policy.lighting
+        if (lightingNow !== lastLighting) { lastLighting = lightingNow; setLighting(lightingNow) }
         if (bench) {
           const dt = performance.now() - t0
           benchSum += dt; benchN += 1; if (dt > benchMax) benchMax = dt
@@ -249,10 +259,12 @@ export function usePose({ onFrame, send, poseActive, sendActive, paused }: UsePo
           rafRef.current = requestAnimationFrame(loop)
           return
         }
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-          audio: false,
-        })
+        stream = await acquireCameraStream(
+          (c) => navigator.mediaDevices.getUserMedia(c),
+          isPortraitViewport(),
+        )
+        const settings = stream.getVideoTracks()[0]?.getSettings?.()
+        if (settings) console.info(`[camera] ${settings.width}x${settings.height} @${settings.frameRate ?? '?'}fps`)
         const video = videoRef.current
         if (!video || stopped) {
           // Resolve-after-cleanup (P1-I): stop the just-acquired stream so it doesn't leak.
@@ -282,5 +294,5 @@ export function usePose({ onFrame, send, poseActive, sendActive, paused }: UsePo
     }
   }, [poseActive, modelStatus, retryNonce, logicalNow])
 
-  return { videoRef, modelStatus, cameraStatus, permission, errorMsg, retryCamera }
+  return { videoRef, modelStatus, cameraStatus, permission, errorMsg, retryCamera, lighting }
 }

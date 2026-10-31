@@ -1,0 +1,63 @@
+# Run Module — .gitignore
+
+# ── Environment ──────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Node / TypeScript ────────────────────────────────────────────────────────
+node_modules/
+build/
+dist/
+*.js.map
+*.d.ts.map
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Coverage ─────────────────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE / Editor ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Compiled binaries ────────────────────────────────────────────────────────
+*.exe
+*.out
+*.o
+*.a
+*.so
+*.dylib
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+# Named volumes are managed by Docker, not tracked here.
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+*.tsbuildinfo
+.cache/
+tmp/
+*.iml
+.gradle/
+local.properties
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+.idea/

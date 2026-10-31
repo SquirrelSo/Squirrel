@@ -17,7 +17,14 @@ def _write(path: Path, body: str) -> Path:
 
 def test_application_catalog_enables_completed_exercises():
     catalog = load_catalog()
-    assert [entry.slug for entry in catalog.enabled()] == ["squat", "bicep_curl", "high_knee"]
+    assert [entry.slug for entry in catalog.enabled()] == [
+        "squat",
+        "bicep_curl",
+        "high_knee",
+        "pushup",
+    ]
+    # Push-up is the first enabled SIDE-view exercise; the front-view exercises are unaffected.
+    assert catalog.get("pushup").view == "side"
     assert catalog.get("squat").view == "front"
     assert catalog.get("bicep_curl").status == "enabled"
     assert catalog.get("high_knee").status == "enabled"

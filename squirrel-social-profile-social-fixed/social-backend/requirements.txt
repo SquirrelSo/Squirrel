@@ -1,0 +1,9 @@
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+SQLAlchemy==2.0.54
+alembic==1.20.0
+psycopg[binary]==3.3.6
+PyJWT[crypto]==2.15.0
+httpx==0.28.1
+boto3==1.43.103
+pytest==9.0.3

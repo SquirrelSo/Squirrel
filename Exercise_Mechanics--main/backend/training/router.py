@@ -12,12 +12,15 @@ After `setup.ready` the client reconnects to train, whose rules load the accepte
 
 from __future__ import annotations
 
-from asyncio import to_thread
+from asyncio import get_running_loop, to_thread
 from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from backend import config, live
+from backend.auth.tokens import verify_access_token
 from backend.config import user_dir
+from backend.db.exercise_sessions import sync_session
 from backend.core.frame import FrameValidationError, validate_training_frame
 from backend.sessions.store import SessionAccess, SessionAccessError, validate_session_access
 from backend.training.baseline import load_baseline_document, save_baseline
@@ -78,6 +81,15 @@ def _status_dict(s: SetupStatus) -> dict:
     }
 
 
+def _socket_signed_in(websocket: WebSocket) -> bool:
+    """Browsers can't set headers on a WebSocket, so the access token rides in `?token=`. It must
+    belong to the `user_id` the socket asks for. Always true while auth is switched off."""
+    if not config.auth_required():
+        return True
+    token = websocket.query_params.get("token") or ""
+    return verify_access_token(token) == websocket.query_params.get("user_id")
+
+
 async def _session_access(websocket: WebSocket) -> SessionAccess | None:
     """Resolve the exact persisted plan or reject the socket without any identity fallback."""
     try:
@@ -94,6 +106,12 @@ async def _session_access(websocket: WebSocket) -> SessionAccess | None:
 
 
 async def _setup_access(websocket: WebSocket) -> SessionAccess | None:
+    if not _socket_signed_in(websocket):
+        await websocket.send_json(
+            _envelope("setup.error", {"code": "UNAUTHORIZED", "detail": "sign in to use this session"})
+        )
+        await websocket.close(code=1008, reason="UNAUTHORIZED")
+        return None
     if not websocket.query_params.get("session_id"):
         await websocket.send_json(
             _envelope(
@@ -168,6 +186,7 @@ async def setup_ws(websocket: WebSocket) -> None:
                             exercise,
                             baseline=orch.baseline,
                             target=target,
+                            variant=_variant(access),
                         )
                         set_dir = (
                             user_dir(uid)
@@ -247,6 +266,9 @@ async def _train_error(
 
 
 async def _training_access(websocket: WebSocket) -> SessionAccess | None:
+    if not _socket_signed_in(websocket):
+        await _train_error(websocket, "UNAUTHORIZED", "sign in to use this session", close=True)
+        return None
     if not websocket.query_params.get("session_id"):
         await _train_error(
             websocket,
@@ -271,6 +293,12 @@ async def _training_access(websocket: WebSocket) -> SessionAccess | None:
             stable_code = "INVALID_SESSION"
         await _train_error(websocket, stable_code, exc.detail, close=True)
         return None
+
+
+def _variant(access: SessionAccess) -> str | None:
+    """The planned variant (curls: "single" / "double"), or None."""
+    variant = access.record.get("plan", {}).get("variant")
+    return variant if isinstance(variant, str) else None
 
 
 def _movement_target(access: SessionAccess) -> MovementTarget | None:
@@ -312,6 +340,7 @@ async def train_ws(websocket: WebSocket) -> None:
             access.exercise_id,
             baseline=baseline,
             target=target,
+            variant=_variant(access),
         )
     except KeyError as exc:
         await _train_error(websocket, "INVALID_EXERCISE", str(exc), close=True)
@@ -349,8 +378,12 @@ async def train_ws(websocket: WebSocket) -> None:
         f"[ws/train] user={access.user_id} exercise={access.exercise_id} "
         f"session={access.session_id} set={access.set_no} adapter=ready"
     )
-    previous_t_ms: float | None = None
+    with live.training(access.user_id):
+        await _train_loop(websocket, access, adapter, capture)
 
+
+async def _train_loop(websocket: WebSocket, access, adapter, capture) -> None:
+    previous_t_ms: float | None = None
     try:
         while True:
             try:
@@ -380,5 +413,23 @@ async def train_ws(websocket: WebSocket) -> None:
                 )
                 return
             await websocket.send_json(_envelope("train.status", data))
+            if _set_finished(data):
+                _mirror_to_database(access)
     except WebSocketDisconnect:
         print("[ws/train] disconnected")
+        _mirror_to_database(access)
+
+
+def _set_finished(data: dict) -> bool:
+    """True only on the one status that closes a set: a rep set's final cycle
+    (`set_cycle_completed`) or a timed set reaching its time (`set_completed`)."""
+    events = data.get("events") if isinstance(data, dict) else None
+    return isinstance(events, dict) and (
+        events.get("set_cycle_completed") is True or events.get("set_completed") is True
+    )
+
+
+def _mirror_to_database(access: SessionAccess) -> None:
+    """Refresh the session's database row off the socket's path. Fire-and-forget: sync_session never
+    raises and is a no-op without DATABASE_URL, so training never waits on, or fails with, the database."""
+    get_running_loop().run_in_executor(None, sync_session, access.user_id, access.session_id)

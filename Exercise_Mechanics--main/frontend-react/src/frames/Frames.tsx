@@ -30,7 +30,32 @@ function friendlyGroups(missing: string[]): string[] {
   return groups
 }
 
-function GatePrompt({ missing }: { missing: string[] }) {
+/* Setup copy is exercise-shaped, not generic. "Stand tall, feet shoulder-width apart" is actively
+   misleading to someone about to do a push-up, and the one instruction a push-up user MUST get up
+   front — point the camera at your side — has no equivalent in any standing exercise. Keyed by the
+   engine's motion so a new exercise either supplies its own copy or falls back to the neutral
+   standing text rather than silently inheriting squat instructions. */
+type SetupCopy = { frame: string; start: string; footnote: string }
+
+const SETUP_COPY: Record<string, SetupCopy> = {
+  pushup: {
+    frame: 'Place the camera at your side, a few steps back, so your whole body fits from head to feet.',
+    start: 'Get into the top of a push-up: arms straight, body in one line from shoulders to ankles.',
+    footnote: 'Push-ups are measured from the side. Facing the camera pauses tracking.',
+  },
+}
+
+const DEFAULT_SETUP_COPY: SetupCopy = {
+  frame: 'Step back so your whole body fits in the frame.',
+  start: 'Stand tall with your feet shoulder-width apart.',
+  footnote: 'Every setup check must remain valid together.',
+}
+
+function setupCopy(s: EngineState): SetupCopy {
+  return SETUP_COPY[s.currentExercise.motion] ?? DEFAULT_SETUP_COPY
+}
+
+function GatePrompt({ s, missing }: { s: EngineState; missing: string[] }) {
   const ready = missing.length === 0
   const groups = friendlyGroups(missing)
   return (
@@ -40,9 +65,7 @@ function GatePrompt({ missing }: { missing: string[] }) {
         {ready ? "You're in frame" : 'Full body not visible'}
       </div>
       <div className="coach-guide__body">
-        {ready
-          ? 'Hold steady — starting your set…'
-          : 'Step back so your whole body fits in the frame.'}
+        {ready ? 'Hold steady — starting your set…' : setupCopy(s).frame}
       </div>
 
       {!ready && groups.length > 0 && (
@@ -64,6 +87,10 @@ function conditionName(templateId: string): string {
   if (templateId === 'standing_posture') return 'Standing posture'
   if (templateId === 'stance_width') return 'Stance width'
   if (templateId === 'setup_readiness') return 'High Knee position'
+  // Push-up. Without these two the panel shows the raw rule ids ("plank ready", "side view
+  // orientation"), which read as diagnostics rather than as something the user can act on.
+  if (templateId === 'plank_ready') return 'Plank position'
+  if (templateId === 'side_view_orientation') return 'Camera angle'
   return templateId.replaceAll('_', ' ')
 }
 
@@ -132,7 +159,7 @@ function PreCheckPrompt({ s }: { s: EngineState }) {
   const templateCue = ok ? null : cue
   const bodyText = ok
     ? 'Keep every check green until capture begins.'
-    : (templateCue ? null : 'Stand tall with your feet shoulder-width apart.')
+    : (templateCue ? null : setupCopy(s).start)
   return (
     <>
       <div className="coach-guide">
@@ -167,7 +194,7 @@ function PreCheckPrompt({ s }: { s: EngineState }) {
           Hold {Math.round(dwell.held_ms / 100) / 10}s of {Math.round(dwell.required_ms / 100) / 10}s
         </div>
       <div className="coach-guide__foot">
-          Every setup check must remain valid together.
+          {setupCopy(s).footnote}
         </div>
       </div>
       {templateCue && <SetupCueHud text={templateCue} />}
@@ -286,7 +313,7 @@ export function F2_Gate({
 }) {
   const missing = s.setup?.missing ?? []
   const prompt = missing.length > 0
-    ? <GatePrompt missing={missing} />
+    ? <GatePrompt s={s} missing={missing} />
     : <PreCheckPrompt s={s} />
 
   return (
@@ -311,6 +338,39 @@ export function F2_Gate({
 }
 
 /* ============ F3 · Active Workout (Section E zones) ============ */
+
+/* The backend has stopped measuring even though it can see the user perfectly well — today that
+   means a push-up being filmed from the front. This is its own banner rather than a line in
+   RecoveryBanner because the two say opposite things: RecoveryBanner asks the user to hold still
+   until tracking recovers, while this one needs them to MOVE, and needs to be explicit that reps
+   have stopped counting in the meantime. The instruction text is the backend's own rule cue, so
+   the wording stays owned by whichever rule did the invalidating. */
+function MeasurementBlockedBanner({ s }: { s: EngineState }) {
+  if (s.measurementBlockedBy.length === 0) return null
+  const instruction = s.cue?.text ?? 'Turn side-on to the camera to resume tracking.'
+  const noun = s.targetMeasure === 'time' ? 'lifts' : 'reps'
+  return (
+    <div style={{
+      position: 'absolute', top: '42%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 32,
+      display: 'flex', alignItems: 'center', gap: 16, padding: '18px 26px', borderRadius: 18,
+      maxWidth: 620, background: 'rgba(8,10,14,0.92)', border: `1px solid ${Q.red}77`,
+      animation: 'cueIn .3s ease both', boxShadow: `0 14px 44px rgba(0,0,0,0.55), inset 0 0 0 1px ${Q.red}22`,
+    }} role="status" aria-live="assertive">
+      <span style={{ width: 40, height: 40, borderRadius: 12, background: Q.red, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+        {Icon.camera({ size: 23, stroke: '#08090c', sw: 2.4 })}
+      </span>
+      <span>
+        <span style={{ ...TYPE.body, fontSize: 21, color: Q.neutral, fontWeight: 700, display: 'block' }}>
+          {instruction}
+        </span>
+        <span style={{ ...TYPE.caption, fontSize: 13, color: Q.red, display: 'block', marginTop: 3 }}>
+          Measurement paused — no {noun} are being counted.
+        </span>
+      </span>
+    </div>
+  )
+}
+
 function RecoveryBanner({ s }: { s: EngineState }) {
   let msg: string | null = null
   let icon = Icon.frame
@@ -318,6 +378,9 @@ function RecoveryBanner({ s }: { s: EngineState }) {
   // A dropped WebSocket is a connection failure, not a camera or zero-rep signal.
   if (s.socketError) { msg = s.socketError.detail; icon = Icon.alert; sev = 'error' }
   else if (s.disconnected) { msg = `Connection lost — no ${s.targetMeasure === 'time' ? 'lifts' : 'reps'} are being credited. Reconnecting…`; icon = Icon.frame; sev = 'error' }
+  // Not while measurement is blocked: MeasurementBlockedBanner owns that case and occupies the same
+  // spot, and "hold still" directly contradicts the "turn side-on" it is showing.
+  else if (s.measurementBlockedBy.length > 0) { msg = null }
   else if (s.trackingConfidence < CONF_FLOOR) { msg = 'Hold still for a moment while we reconnect tracking.'; icon = Icon.frame }
   if (!msg) return null
   const col = sev === 'error' ? Q.red : Q.amber
@@ -363,6 +426,7 @@ export function F3_Active({
       <div className="coach-live-screen__scrim" />
 
       <RecoveryBanner s={s} />
+      <MeasurementBlockedBanner s={s} />
 
       {/* Top-left cluster: Timer ring | Exit/Pause (stacked, same column) | Exercise info.
           Exit + Pause are identical icon-only 40×40 chips; the global Exit chip is hidden on

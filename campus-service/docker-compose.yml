@@ -1,0 +1,24 @@
+# Local stack: PostGIS + API (worker runs inline) — `docker compose up`, then `npm run migrate && npm run seed`
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: campus
+      POSTGRES_PASSWORD: campus
+      POSTGRES_DB: campus
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U campus"], interval: 5s, retries: 10 }
+  api:
+    build: .
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgres://campus:campus@db:5432/campus
+      AUTH_DEV_HS256_SECRET: dev-only-change-me
+      WORKER_INLINE: "1"
+      CORS_ORIGINS: http://localhost:8081
+    ports: ["8080:8080"]
+    command: sh -c "node dist/db/migrate.js && node dist/seed/run.js && node dist/index.js"
+volumes:
+  pgdata: {}

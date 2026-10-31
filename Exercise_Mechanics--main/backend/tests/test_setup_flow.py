@@ -38,7 +38,7 @@ def _config(**changes: object) -> SetupConfig:
         min_valid_coverage=0.8,
         invalid_pause_ms=50.0,
         invalid_reset_ms=200.0,
-        max_joint_stddev_px=8.0,
+        max_joint_stddev_torso=0.12,
     )
     return replace(config, **changes)
 
@@ -105,15 +105,37 @@ def test_combined_precheck_streams_every_failure_and_missing_keypoint() -> None:
     }
 
 
-def test_any_precheck_failure_resets_the_one_continuous_dwell() -> None:
+def test_a_sustained_precheck_failure_resets_the_one_continuous_dwell() -> None:
+    # Failing for invalid_pause_ms (50 ms here) or longer restarts the hold.
     orchestrator = _orchestrator(stable_ms=200.0)
     orchestrator.update(_frame(), 0.0)
+    orchestrator.update(_frame(hidden=("nose",)), 100.0)
     status = orchestrator.update(_frame(hidden=("nose",)), 150.0)
     assert status.dwell_ms == 0.0
 
     orchestrator.update(_frame(), 200.0)
     assert orchestrator.update(_frame(), 350.0).phase == PRECHECK
     assert orchestrator.update(_frame(), 400.0).phase == COLLECTING
+
+
+def test_a_one_frame_precheck_flicker_does_not_restart_the_dwell() -> None:
+    # Landmark jitter (a knee read just under the extension floor for a frame) is not a failure
+    # to stand still; restarting on it can hold a correctly standing person in pre-check forever.
+    orchestrator = _orchestrator(stable_ms=200.0)
+    orchestrator.update(_frame(), 0.0)
+    status = orchestrator.update(_frame(bent_knees=True), 100.0)
+    assert status.phase == PRECHECK
+    assert status.dwell_ms == 100.0
+    assert {result.reason_id for result in status.failures} == {"knees_not_extended"}
+
+    assert orchestrator.update(_frame(), 120.0).phase == PRECHECK
+    assert orchestrator.update(_frame(), 200.0).phase == COLLECTING
+
+
+def test_failing_frames_never_complete_the_dwell() -> None:
+    orchestrator = _orchestrator(stable_ms=200.0)
+    orchestrator.update(_frame(), 0.0)
+    assert orchestrator.update(_frame(bent_knees=True), 240.0).phase == PRECHECK
 
 
 @pytest.mark.parametrize("ratio", (0.70, 0.79, 0.80, 1.20, 1.21, 1.30))
@@ -295,7 +317,7 @@ def test_generic_orchestrator_has_no_squat_template_or_anatomy_dependency() -> N
     adapter = _OtherExerciseAdapter()
     config = SetupConfig(
         exercise="other",
-        required_keypoints=("nose",),
+        required_keypoints=("nose", "left_ankle"),
         pre_check_templates=("alignment",),
         baseline_capture_templates=("reference_pose",),
         stable_ms=0.0,
@@ -306,10 +328,10 @@ def test_generic_orchestrator_has_no_squat_template_or_anatomy_dependency() -> N
         min_valid_coverage=1.0,
         invalid_pause_ms=10.0,
         invalid_reset_ms=100.0,
-        max_joint_stddev_px=5.0,
+        max_joint_stddev_torso=0.12,
     )
     orchestrator = SetupOrchestrator(config, adapter)
-    keypoints = {"nose": {"x": 1.0, "y": 2.0, "v": 0.99}}
+    keypoints = {"nose": {"x": 1.0, "y": 2.0, "v": 0.99}, "left_ankle": {"x": 1.0, "y": 302.0, "v": 0.99}}
 
     orchestrator.update(keypoints, 0.0)
     orchestrator.update(keypoints, 50.0)
@@ -321,3 +343,38 @@ def test_generic_orchestrator_has_no_squat_template_or_anatomy_dependency() -> N
         ("reference_pose",),
         ("reference_pose",),
     ]
+
+
+# ---- Stillness is judged relative to the person's size, not in pixels ---------------------------
+
+def _standing_body(scale: float, sway: float, frame_no: int) -> dict:
+    """A standing body `scale` times its reference size (bigger = closer to the camera), swaying
+    sideways by `sway` torso lengths (alternating left/right), as pixel keypoints."""
+    torso = 100.0 * scale
+    dx = sway * torso * (1 if frame_no % 2 else -1)
+    cx, top = 500.0, 100.0
+    y = {"nose": -40, "shoulder": 0, "hip": 100, "knee": 190, "ankle": 280}
+    points = {"nose": (cx + dx, top + y["nose"] * scale)}
+    for side, sx in (("left", 1), ("right", -1)):
+        for joint, half_width in (("shoulder", 22), ("hip", 15), ("knee", 14), ("ankle", 14)):
+            points[f"{side}_{joint}"] = (cx + dx + sx * half_width * scale, top + y[joint] * scale)
+    return {name: {"x": x, "y": yy, "v": 0.95} for name, (x, yy) in points.items()}
+
+
+def test_the_same_sway_gets_the_same_verdict_near_and_far():
+    from backend.training.baseline import BaselineCollector
+
+    def quality(scale: float, sway: float):
+        collector = BaselineCollector(_GATE)
+        for n in range(60):
+            collector.add(_standing_body(scale, sway, n))
+        return collector.quality(observed_frames=60, valid_duration_ms=3000.0)
+
+    limit = _config().max_joint_stddev_torso
+    far, near = quality(1.0, 0.07), quality(4.0, 0.07)       # holding still (real footage: ~0.07)
+    assert near.max_joint_stddev_px == pytest.approx(far.max_joint_stddev_px * 4)
+    assert far.max_joint_stddev_px < 8 < near.max_joint_stddev_px   # the old pixel limit: near failed
+    assert near.max_joint_stddev_rel == pytest.approx(far.max_joint_stddev_rel) == pytest.approx(0.07)
+    assert near.max_joint_stddev_rel <= limit and far.max_joint_stddev_rel <= limit
+    for scale in (1.0, 4.0):                                  # still moving into place: rejected
+        assert quality(scale, 0.25).max_joint_stddev_rel > limit

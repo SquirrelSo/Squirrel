@@ -1,0 +1,30 @@
+# Push-up template activation is context-specific. False means no evaluation, cue, persistence or
+# score contribution in that context.
+#
+# plank_ready gates the pre-check and every baseline-capture frame: the baseline is only meaningful
+# if it was captured in a genuine extended-arm plank, side-on to the camera.
+#
+# side_view_orientation runs in ALL THREE contexts on purpose. The camera requirement is not a
+# one-time setup step — a user rotating a few degrees mid-set silently corrupts both live signals,
+# so it stays on as a live monitor (role: monitor — it cues, it never scores; a camera problem is
+# not a form fault).
+schema_version: 1
+
+contexts:
+  pre_check:
+    pushup_depth: false
+    body_line: false
+    side_view_orientation: true
+    plank_ready: true
+
+  baseline_capture:
+    pushup_depth: false
+    body_line: false
+    side_view_orientation: true
+    plank_ready: true
+
+  live:
+    pushup_depth: true
+    body_line: true
+    side_view_orientation: true
+    plank_ready: false

@@ -16,6 +16,7 @@ from types import ModuleType
 
 from backend.core.frame import TrainingFrame
 from backend.engine.cues import CueCandidate, CueSelector
+from backend.engine import rep_outcome
 from backend.engine.loader import ExerciseConfiguration, load_exercise_config
 from backend.engine.rep_fsm import (
     AttemptResult,
@@ -47,9 +48,15 @@ class BicepCurlAdapter:
         baseline: dict,
         target_reps: int,
         config: ExerciseConfiguration,
+        variant: str | None = None,
     ) -> None:
         if not isinstance(target_reps, int) or isinstance(target_reps, bool) or target_reps < 1:
             raise BicepCurlAdapterConfigurationError("target_reps must be a positive integer")
+        if variant not in (None, "single", "double"):
+            raise BicepCurlAdapterConfigurationError("variant must be 'single', 'double' or None")
+        # The planned curl (session plan): "double" needs both arms through every rep, "single"
+        # counts the working arm and says so when both arms curl. None (older sessions): either.
+        self._variant = variant
         if not isinstance(baseline, dict):
             raise BicepCurlAdapterConfigurationError("baseline must be a mapping")
 
@@ -97,6 +104,9 @@ class BicepCurlAdapter:
         # Per-arm peaks for the attempt in flight. The FSM only ever sees min(left, right), so
         # without these a capture cannot say WHICH arm limited a shallow rep.
         self._arm_peaks = _empty_arm_peaks()
+        # The highest point BOTH arms reached together this attempt, from frames where both were
+        # measured (single-arm plan: both arms curling is the wrong exercise).
+        self._both_arms_peak = 0.0
         self._capture_rollover_pending = False
         self._start_new_capture_rep = False
 
@@ -192,6 +202,11 @@ class BicepCurlAdapter:
             "left": max(self._arm_peaks["left"], rom_reading.left_ratio),
             "right": max(self._arm_peaks["right"], rom_reading.right_ratio),
         }
+        both_seen = rom_reading.arms_seen == "both"
+        if both_seen and state.phase != SETUP:
+            self._both_arms_peak = max(
+                self._both_arms_peak, min(rom_reading.left_ratio, rom_reading.right_ratio)
+            )
         rule_states = self._rule_states(readings)
         timeline_frame = TimelineFrame(frame.t_ms, state.phase, rule_states, tracking=True)
 
@@ -249,18 +264,69 @@ class BicepCurlAdapter:
                 )
             )
             self._pending_shallow_cue = False
+        variant_cue = self._variant_cue(state, rom_reading, both_seen)
+        if variant_cue is not None:
+            candidates.append(variant_cue)
+        # A rep that did not count (too fast, or short of full range), or a shallow rep that did,
+        # is said at once.
+        not_counted = rep_outcome.not_counted_cue(
+            state.completed_attempt,
+            fsm=self._config.fsm,
+            rom_rule_id="curl_rom",
+            rom_template=self._config.templates["curl_rom"],
+        )
+        if not_counted is not None:
+            candidates.append(not_counted)
+        shallow_warning = rep_outcome.shallow_warning_cue(
+            state.completed_attempt,
+            rom_rule_id="curl_rom",
+            rom_template=self._config.templates["curl_rom"],
+        )
+        if shallow_warning is not None:
+            candidates.append(shallow_warning)
         cue = self._cue_selector.select(candidates, frame.t_ms)
         self._previous_phase = state.phase
         return self._status(state, readings, issues, cue)
 
+    def _variant_cue(self, state, reading, both_seen: bool) -> CueCandidate | None:
+        """Say when the arms do not match the planned curl (field test: a single-arm plan counted
+        double-arm reps with no word about it)."""
+        cues = self._config.templates["curl_rom"].get("variant_cues") or {}
+        if self._variant == "single" and state.attempt_completed:
+            both = self._both_arms_peak >= self._config.templates["curl_rom"]["full_rom_gate"] / 2
+            self._both_arms_peak = 0.0
+            if both and cues.get("single"):
+                return CueCandidate("curl_variant", cues["single"], 1, display_ms=2500.0)
+        if state.attempt_discarded:
+            self._both_arms_peak = 0.0
+        if (
+            self._variant == "double"
+            and both_seen
+            and state.phase == SETUP
+            and reading.leading_ratio >= float(self._config.fsm["min_rep_peak"])
+            and min(reading.left_ratio, reading.right_ratio) <= self._descent_trigger
+            and cues.get("double")
+        ):
+            # One arm is curling and the other has not left rest: a double curl never starts.
+            return CueCandidate("curl_variant", cues["double"], 1, display_ms=2500.0)
+        return None
+
     def _observation(self, reading) -> RepObservation:
         """Turn one curl frame into the movement facts the FSM acts on.
 
-        The two reductions are deliberately different. A curl is FULL only when the weaker arm
-        reaches the gate (`min`), but it has STARTED and ENDED according to the leading arm
-        (`max`) — the movement is under way as soon as either arm leaves rest, and it is not over
-        until the higher arm is back down. Driving the return from the weaker arm ends the rep the
-        instant the FIRST arm lowers, while the other is still curled."""
+        Double-arm plan: the WEAKER arm drives the rep (`min`): it starts when both arms leave rest
+        and reaches full range only when both do, and it is over once both are back down (`max`).
+        Otherwise everything follows the leading arm (`max`): the movement is under way as soon as
+        either arm leaves rest, reaches full range when either arm does, and is over once the
+        higher arm is back down. A hidden arm reads as the visible one (rules/curl_rom.py)."""
+        if self._variant == "double":
+            weaker = min(reading.left_ratio, reading.right_ratio)
+            return RepObservation(
+                progress=weaker,
+                movement_started=weaker > self._descent_trigger,
+                full_rom_reached=self._rom.is_full_rom(weaker),
+                returned_to_rest=reading.leading_ratio < self._top_return,
+            )
         return RepObservation(
             progress=reading.progress,
             movement_started=reading.leading_ratio > self._descent_trigger,
@@ -316,6 +382,7 @@ class BicepCurlAdapter:
             "rep": state.qualified_count if attempt.qualified else None,
             "qualified": attempt.qualified,
             "classification": attempt.classification,
+            **rep_outcome.attempt_fields(attempt),
             "peak": attempt.peak,
             "score": score.score,
             "time_score": score.time_score,
@@ -366,20 +433,14 @@ class BicepCurlAdapter:
                 "unavailable_rule_ids": unavailable,
             },
             "phase": state.phase,
-            "counters": {
-                "attempts": state.attempt_count,
-                "qualified": state.qualified_count,
-                "full_rom": state.full_rom_count,
-                "shallow": state.shallow_count,
-                "invalid": state.invalid_attempt_count,
-            },
+            "counters": rep_outcome.counters(state),
             "rom": {
                 "available": rom is not None,
                 "ratio": (round(rom.progress, 3) if rom is not None else None),
                 "percent": _percent(rom.progress) if rom is not None else None,
                 "full_rom_gate": self._rom.full_rom_gate,
                 "full_rom": (rom.full_rom if rom is not None else None),
-                # Per-arm detail so coaching can name the limiting side; the weaker arm is the signal.
+                # Per-arm detail so coaching can name the arm that curled less; the leading arm is the signal.
                 "left_ratio": (round(rom.left_ratio, 3) if rom is not None else None),
                 "right_ratio": (round(rom.right_ratio, 3) if rom is not None else None),
                 "left_percent": _percent(rom.left_ratio) if rom is not None else None,
@@ -455,6 +516,7 @@ def build_bicep_curl_adapter(
     baseline: dict,
     target_reps: int,
     config: ExerciseConfiguration | None = None,
+    variant: str | None = None,
 ) -> BicepCurlAdapter:
     """Build bicep curl from its validated config and per-set body-relative wrist references."""
     selected_config = config or load_exercise_config("bicep_curl")
@@ -463,6 +525,7 @@ def build_bicep_curl_adapter(
             baseline=baseline,
             target_reps=target_reps,
             config=selected_config,
+            variant=variant,
         )
     except (KeyError, TypeError, ValueError, RuntimeError) as exc:
         if isinstance(exc, BicepCurlAdapterConfigurationError):
@@ -521,6 +584,9 @@ def _fsm_inputs(config: ExerciseConfiguration) -> dict:
         )
     }
     values["max_frame_delta_ms"] = config.scoring["max_frame_delta_ms"]
+    values["max_tracking_gap_ms"] = config.fsm.get("max_tracking_gap_ms")
+    values.update(rep_outcome.fsm_policy_inputs(config.fsm))
+    values["frame_cadence"] = config.scoring.get("frame_cadence")
     return values
 
 

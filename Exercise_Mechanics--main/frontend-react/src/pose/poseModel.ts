@@ -23,10 +23,36 @@ export type Delegate = 'GPU' | 'CPU'
 export const DEFAULT_COMPLEXITY: ModelComplexity = 'lite'
 export const DEFAULT_DELEGATE: Delegate = 'GPU'
 
-/** WASM bundle (shared by every variant). */
-export const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm'
+/* WASM runtime (shared by every variant) — sourced from the INSTALLED @mediapipe/tasks-vision
+   package (built from google-ai-edge/mediapipe), bundled by Vite and served from our own origin.
+   It previously came from a hard-coded jsDelivr URL pinned to 0.10.12 while package-lock resolves
+   the JS API to 0.10.35: the JS glue and the WASM graph runtime must be the same release, and a
+   mismatch fails or misbehaves in ways that are hard to diagnose on a user's phone. Importing the
+   files from the package makes them move together on every `npm ci`, and drops a third-party CDN
+   from the critical path on mobile networks.
 
-/** Official float16 model bundles. Heavy is ~5–6× the download of lite. */
+   Both builds ship: SIMD (fast) and no-SIMD — older Android WebViews / Chrome < 91 lack WASM
+   SIMD, and without the fallback pose never starts on exactly the low-end phones we must support. */
+import simdLoaderUrl from '@mediapipe/tasks-vision/vision_wasm_internal.js?url'
+import simdBinaryUrl from '@mediapipe/tasks-vision/vision_wasm_internal.wasm?url'
+import noSimdLoaderUrl from '@mediapipe/tasks-vision/vision_wasm_nosimd_internal.js?url'
+import noSimdBinaryUrl from '@mediapipe/tasks-vision/vision_wasm_nosimd_internal.wasm?url'
+
+export type WasmFiles = { wasmLoaderPath: string; wasmBinaryPath: string }
+
+export const WASM_FILES: Record<'simd' | 'nosimd', WasmFiles> = {
+  simd: { wasmLoaderPath: simdLoaderUrl, wasmBinaryPath: simdBinaryUrl },
+  nosimd: { wasmLoaderPath: noSimdLoaderUrl, wasmBinaryPath: noSimdBinaryUrl },
+}
+
+/** Pick the WASM build this browser can run. */
+export function wasmFilesFor(simdSupported: boolean): WasmFiles {
+  return simdSupported ? WASM_FILES.simd : WASM_FILES.nosimd
+}
+
+/** Official float16 model bundles, from Google's MediaPipe model hosting (the URLs published in the
+ *  google-ai-edge/mediapipe Pose Landmarker model card). Pinned to bundle version `1` so every
+ *  client runs the same weights. Heavy is ~5–6× the download of lite. */
 export const MODEL_URLS: Record<ModelComplexity, string> = {
   lite: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
   full: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
@@ -63,10 +89,10 @@ export function benchEnabled(): boolean {
   try { return new URLSearchParams(location.search).get('posebench') === '1' } catch { return false }
 }
 
-export type PoseModelConfig = { complexity: ModelComplexity; modelUrl: string; delegate: Delegate; wasmUrl: string }
+export type PoseModelConfig = { complexity: ModelComplexity; modelUrl: string; delegate: Delegate }
 
 /** The full resolved config used to build the PoseLandmarker. */
 export function resolvePoseModelConfig(): PoseModelConfig {
   const complexity = resolveComplexity()
-  return { complexity, modelUrl: MODEL_URLS[complexity], delegate: resolveDelegate(), wasmUrl: WASM_URL }
+  return { complexity, modelUrl: MODEL_URLS[complexity], delegate: resolveDelegate() }
 }

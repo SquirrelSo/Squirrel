@@ -85,6 +85,7 @@ class HighKneeAdapter:
             "reached_gate": self._rom.is_full_rom,
             "fsm": config.fsm,
             "max_frame_delta_ms": config.scoring["max_frame_delta_ms"],
+            "frame_cadence": config.scoring.get("frame_cadence"),
         }
         self._detectors = {
             side: high_knee_lift_detector(side, **detector_inputs)
@@ -193,6 +194,11 @@ class HighKneeAdapter:
             )
             for issue in issues
         ]
+        if any(detection.reason == "too_slow" for detection in detections):
+            # A march, not a run: said at once, while the person can speed up.
+            candidates.append(
+                CueCandidate("tempo", self._config.fsm["too_slow_cue"], 1, display_ms=2500.0)
+            )
         if any(event.classification == "shallow" for event in events):
             template = self._config.templates["knee_drive_rom"]
             candidates.append(

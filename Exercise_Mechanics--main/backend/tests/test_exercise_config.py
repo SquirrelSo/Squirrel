@@ -43,7 +43,7 @@ def test_real_squat_bundle_validates_and_exposes_decisions():
     assert bundle.scoring["version"] == 9
     assert bundle.templates["depth"]["full_rom_gate"] == 0.85
     assert bundle.templates["depth"]["shallow_next_rep_cue_ms"] == 500
-    assert bundle.fsm["min_rep_peak"] == 0.30
+    assert bundle.fsm["min_rep_peak"] == 0.40
     assert bundle.templates["standing_posture"]["setup_policy"]["min_knee_extension_deg"] == 160
     assert bundle.contexts["pre_check"]["standing_posture"] is True
     assert bundle.contexts["live"]["standing_posture"] is False
@@ -83,6 +83,7 @@ def test_startup_fully_validates_only_enabled_exercises():
         "squat",
         "bicep_curl",
         "high_knee",
+        "pushup",
     )
     with pytest.raises(ConfigurationError, match="planned exercise"):
         load_exercise_config("plank")

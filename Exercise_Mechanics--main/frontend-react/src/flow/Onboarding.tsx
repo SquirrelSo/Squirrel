@@ -3,7 +3,7 @@
    numbered sections (the numbering IS the progress — no side rail), pill
    actions, and a quiet privacy line to close. On submit it POSTs to the
    backend (which mints the user_id + writes profile.json), caches the
-   identity locally, and hands the new user to the calibration step. */
+   identity locally, and hands the new user to sign-up page 2 (ProfileDetails). */
 import { useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { createUser, saveUser, type CachedUser, type OnboardingForm } from './storage'
 import { Eyebrow, PillButton, Wordmark } from './uiV2'
@@ -78,7 +78,7 @@ export function Onboarding(
       <Wordmark />
 
       <div className="v2-obc__head">
-        <Eyebrow>New athlete</Eyebrow>
+        <Eyebrow>Step 1 of 2</Eyebrow>
         <h1 className="v2-obc__title">Build your profile</h1>
         <p className="v2-obc__hint">Under a minute. All fields required.</p>
       </div>

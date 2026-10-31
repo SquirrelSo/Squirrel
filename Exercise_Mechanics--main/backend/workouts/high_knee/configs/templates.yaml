@@ -9,6 +9,12 @@ scoring:
   min_active_ms: 250
   min_active_frames: 5
   max_frame_delta_ms: 100
+  # The tracking-gap boundary scales with the observed frame interval so slow phone cameras
+  # (10-15 fps) are not mistaken for lost tracking: tolerance_frames x median interval, never
+  # below max_frame_delta_ms (unchanged at ~30 fps) and never above max_gap_ms.
+  frame_cadence:
+    tolerance_frames: 3
+    max_gap_ms: 400
   cue_min_display_ms: 800
 
 templates:
@@ -101,7 +107,8 @@ templates:
     tuning_status: development
     fault_label: "Low knee drive"
     active_phases: [ascent, top, descent]
-    required_keypoints: [left_shoulder, right_shoulder, left_hip, right_hip, left_knee, right_knee]
+    # Hips and knees only; shoulders are optional live (rules/knee_drive_rom.py).
+    required_keypoints: [left_hip, right_hip, left_knee, right_knee]
     issue: "The knee drive does not reach the intended height."
     cue: "Drive each knee toward hip height."
     coaching: "Lift each knee toward hip height while staying tall and controlled."
@@ -152,10 +159,12 @@ templates:
       min_torso_length_px: 50
       min_upper_leg_px: 40
       min_lower_leg_px: 40
-      max_side_length_ratio: 1.35
-      min_knee_extension_deg: 160
-      min_stance_ratio: 0.60
-      max_stance_ratio: 1.40
-      max_foot_height_difference_ratio: 0.10
+      # Loose on purpose: this only has to recognise someone standing facing the camera, and
+      # tighter bounds kept real people (soft knees, feet together or wide) from starting.
+      max_side_length_ratio: 1.60
+      min_knee_extension_deg: 150
+      min_stance_ratio: 0.40
+      max_stance_ratio: 2.00
+      max_foot_height_difference_ratio: 0.20
     scoring:
       role: monitor

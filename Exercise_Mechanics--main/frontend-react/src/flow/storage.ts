@@ -290,6 +290,19 @@ export async function fetchExerciseReport(userId: string, sessionId: string, exe
 
 /* Create the persisted session that setup/training require. Skill level is not sent — the
    backend reads it from skill.json and returns the normalized one-exercise P1 plan. */
+/* Carries the HTTP status alongside the message so a caller can distinguish "this identity no
+   longer exists on the server" (404) from a transport or server failure, and recover instead of
+   showing the user a dead end. Extends Error, so existing `error instanceof Error` handling and
+   `.message` reads are unaffected. */
+export class ApiError extends Error {
+  readonly status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 export async function saveSession(userId: string, exercises: SessionExercise[]): Promise<CreatedSession> {
   const res = await fetch(`/api/users/${encodeURIComponent(userId)}/sessions`, {
     method: 'POST',
@@ -302,7 +315,7 @@ export async function saveSession(userId: string, exercises: SessionExercise[]):
       const payload = await res.json() as { detail?: unknown }
       if (typeof payload.detail === 'string') detail = payload.detail
     } catch { /* fall through to the stable status message */ }
-    throw new Error(detail || `Could not create session (${res.status})`)
+    throw new ApiError(res.status, detail || `Could not create session (${res.status})`)
   }
   return res.json() as Promise<CreatedSession>
 }

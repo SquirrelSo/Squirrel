@@ -17,6 +17,7 @@ export const SQUAT: ExerciseConfig = {
   trainedMuscles: ['Quads', 'Glutes', 'Core'],
   targetTempo: '3s down · 1s up',
   targetROMThreshold: 90,
+  romLabel: 'Range of motion',
 }
 
 // TODO(backend): serve this as an exercise descriptor (GET /api/exercises/{slug}). For the
@@ -33,6 +34,7 @@ export const BICEP_CURL: ExerciseConfig = {
   trainedMuscles: ['Biceps', 'Forearms'],
   targetTempo: '2s up · 2s down',
   targetROMThreshold: 85,
+  romLabel: 'Range of motion',
 }
 
 export const HIGH_KNEE: ExerciseConfig = {
@@ -45,6 +47,28 @@ export const HIGH_KNEE: ExerciseConfig = {
   trainedMuscles: ['Hip flexors', 'Quads', 'Core'],
   targetTempo: 'Controlled alternating rhythm',
   targetROMThreshold: 75,
+  romLabel: 'Knee drive',
+}
+
+// TODO(backend): same as the others — a static descriptor until GET /api/exercises/{slug} exists.
+// Push-up is the one SIDE-ON exercise in the catalog: the backend's pushup catalog entry carries
+// `view: side` and side_view_orientation refuses a front-on camera, so every piece of copy hanging
+// off this descriptor has to coach a profile view, not a face-on one. targetROMThreshold mirrors
+// pushup/configs/templates.yaml `full_rom_gate: 0.90` — the elbow-flexion fraction of the captured
+// plank baseline that counts as a full-depth rep.
+export const PUSHUP: ExerciseConfig = {
+  id: 'pushup',
+  name: 'Push-up',
+  motion: 'pushup',
+  targetReps: 10,
+  targetSets: 1,
+  trackedJoints: ['Shoulders', 'Elbows', 'Wrists', 'Hips', 'Ankles'],
+  trainedMuscles: ['Chest', 'Triceps', 'Shoulders', 'Core'],
+  targetTempo: '2s down · 1s up',
+  targetROMThreshold: 90,
+  // The signal is elbow flexion measured against the plank baseline, so "Depth" is what the
+  // number on the rail actually means.
+  romLabel: 'Depth',
 }
 
 // Exercise descriptor registry, keyed by the canonical backend slug. SET_WORKOUT_CONFIG picks
@@ -54,6 +78,7 @@ export const EXERCISES: Record<string, ExerciseConfig> = {
   squat: SQUAT,
   bicep_curl: BICEP_CURL,
   high_knee: HIGH_KNEE,
+  pushup: PUSHUP,
 }
 
 // TODO(backend): weekly workout count comes from a sessions store (persistence layer).

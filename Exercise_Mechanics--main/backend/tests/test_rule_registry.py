@@ -72,7 +72,7 @@ def test_development_rules_may_run_live_but_placeholders_may_not():
 def test_registry_fails_closed_if_kernel_keypoints_drift_from_configuration():
     config = load_exercise_config("squat")
     templates = {rule_id: dict(template) for rule_id, template in config.templates.items()}
-    templates["depth"]["required_keypoints"] = ["left_hip", "right_hip"]
+    templates["depth"]["required_keypoints"] = ["left_hip", "right_hip", "left_knee", "right_knee"]
     drifted = replace(config, templates=templates)
     with pytest.raises(RuntimeError, match="keypoint declaration does not match"):
         active_live_rule_modules(drifted)
