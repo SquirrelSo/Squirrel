@@ -12,6 +12,7 @@ Production hosting configuration and deployment guide for `https://www.squirrels
 { "source": "/(.*)", "destination": "/index.html" }
 ```
 This guarantees deep client-side routes (e.g. `/explore`, `/sign-in`, `/post/:id`, `/date`, `/partner-hunt`) resolve to `/index.html` on direct browser navigation without HTTP 404s.
+Do not add `"cleanUrls"` or `"trailingSlash"` back to `vercel.json`: they break Vercel's SPA catch-all rewrite, causing direct navigation to client routes (like `/profile` and `/social`) to return 404.
 
 ### Content Security Policy (CSP)
 - **`connect-src`**: Strictly pinned to the active Railway services, Supabase storage, and local origins:
