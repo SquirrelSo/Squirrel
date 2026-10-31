@@ -5,16 +5,18 @@
  * once a minute (or after ~40 m).
  */
 import { useSyncExternalStore } from 'react';
+import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 import type { LatLng } from '@/api/campus/types';
 import { getLocationPermission, reportPresence, type LocationPermission } from '@/api/campus/map';
+import { watchWebPosition, type LocationSubscription } from '@/logic/webLocation';
 
 export type LocationState = { permission: LocationPermission | 'checking'; position: LatLng | null; accuracy_m: number | null; simulated: boolean };
 
 let state: LocationState = { permission: 'checking', position: null, accuracy_m: null, simulated: false };
 const listeners = new Set<() => void>();
 let users = 0;
-let sub: Location.LocationSubscription | null = null;
+let sub: Location.LocationSubscription | LocationSubscription | null = null;
 let reportPresenceEnabled = false;
 let lastReport: { at: number; pos: LatLng } | null = null;
 
@@ -49,6 +51,22 @@ async function start(ask: boolean) {
   }
   setState({ permission, simulated: false });
   sub?.remove();
+  if (Platform.OS === 'web') {
+    sub = watchWebPosition(
+      (fix) => {
+        const pos: LatLng = [fix.lat, fix.lon];
+        const acc = fix.accuracy;
+        const moved = !state.position || dist(state.position, pos) >= 8;
+        const accChanged = acc != null && (state.accuracy_m == null || Math.abs(acc - state.accuracy_m) > 15);
+        if (moved || accChanged) setState({ position: pos, accuracy_m: acc });
+      },
+      (err) => {
+        if (err.code === 'permission_denied') setState({ permission: 'denied' });
+        else if (err.code === 'position_unavailable') setState({ permission: 'services_off' });
+      },
+    );
+    return;
+  }
   sub = await Location.watchPositionAsync({ accuracy: Location.Accuracy.Balanced, timeInterval: 4000, distanceInterval: 8 }, (loc) => {
     const pos: LatLng = [loc.coords.latitude, loc.coords.longitude];
     const acc = loc.coords.accuracy ?? null;

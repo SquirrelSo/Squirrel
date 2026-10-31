@@ -127,13 +127,7 @@ export function ZonePanel({ zoneId, meId, showOpen = false }: { zoneId: string; 
         </View>
       )}
       {rel !== 'mine' && !a.claim.allowed && !a.steal.allowed && (
-        Platform.OS === 'web' ? (
-          <View style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.md, backgroundColor: colors.cardHi, borderWidth: 1, borderColor: colors.line, alignItems: 'center' }}>
-            <Text style={{ color: colors.dim, fontFamily: fonts.label, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' }}>Available in the app</Text>
-          </View>
-        ) : (
-          <Button label="Start a run to earn it" iconLeft="run-fast" variant="secondary" size="sm" onPress={() => router.push('/run')} />
-        )
+        <Button label="Start a run to earn it" iconLeft="run-fast" variant="secondary" size="sm" onPress={() => router.push('/run')} />
       )}
 
       {/* History */}

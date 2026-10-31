@@ -8,6 +8,7 @@ import * as Location from 'expo-location';
 import { campusApi, featureUnavailable } from '@/api/campus';
 import { IISER_FEATURES, IISER_ZONES } from '@/api/campus/campusBaseMap';
 import type { LatLng, MapFeatures, NearbyPlayers, PresenceUpdate, Territory, Zone } from '@/api/campus/types';
+import { getWebLocationPermission, requestWebLocationPermission } from '@/logic/webLocation';
 
 /** `source`: 'live' = a backend's world (campus-service, or the campus backend); 'base' = the static IISER base map (no territory state). */
 export type MapData = { zones: Zone[]; features: MapFeatures; territories: Territory[]; source: 'live' | 'base' };
@@ -38,8 +39,9 @@ export type LocationPermission = 'granted' | 'undetermined' | 'denied' | 'blocke
 export type UserLocation = { position: LatLng; accuracy_m: number | null; simulated: boolean };
 
 export async function getLocationPermission(ask = false): Promise<LocationPermission> {
-  // Browsers expose GPS through navigator.geolocation (expo-location wraps it); some embeds don't.
-  if (Platform.OS === 'web' && (typeof navigator === 'undefined' || !navigator.geolocation)) return 'unsupported';
+  if (Platform.OS === 'web') {
+    return ask ? requestWebLocationPermission() : getWebLocationPermission();
+  }
   try {
     if (!(await Location.hasServicesEnabledAsync())) return 'services_off';
     const p = ask ? await Location.requestForegroundPermissionsAsync() : await Location.getForegroundPermissionsAsync();
@@ -51,11 +53,19 @@ export async function getLocationPermission(ask = false): Promise<LocationPermis
   }
 }
 
-
 /** One-off device location (your own, never shared with other users by the app). */
 export async function getUserLocation(): Promise<UserLocation | null> {
   if ((await getLocationPermission()) !== 'granted') {
     return null;
+  }
+  if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ position: [pos.coords.latitude, pos.coords.longitude], accuracy_m: pos.coords.accuracy ?? null, simulated: false }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+      );
+    });
   }
   const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
   return { position: [loc.coords.latitude, loc.coords.longitude], accuracy_m: loc.coords.accuracy ?? null, simulated: false };

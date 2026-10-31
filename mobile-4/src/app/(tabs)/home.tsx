@@ -88,37 +88,20 @@ export default function Home() {
 
       {/* Start run CTA */}
       <FadeIn index={2}>
-        {Platform.OS === 'web' ? (
-          <View style={{ marginTop: 14 }}>
-            <SceneImage kind="run" seed={4} height={132} scrim="strong">
-              <View style={styles.runCta}>
-                <View style={{ flex: 1 }}>
-                  <OverlayKicker>Run or walk</OverlayKicker>
-                  <Display size={30} color={colors.onImage}>Start a run</Display>
-                  <OverlaySub>Available in the app</OverlaySub>
-                </View>
-                <View style={[styles.playBtn, { backgroundColor: alpha(colors.card, 0.85), borderWidth: 1, borderColor: colors.line }]}>
-                  <Text style={{ color: colors.onImage, fontFamily: fonts.label, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' }}>In App</Text>
-                </View>
+        <PressScale onPress={() => router.push('/run')} style={{ marginTop: 14 }} scaleTo={0.98}>
+          <SceneImage kind="run" seed={4} height={132} scrim="strong">
+            <View style={styles.runCta}>
+              <View style={{ flex: 1 }}>
+                <OverlayKicker>Run or walk</OverlayKicker>
+                <Display size={30} color={colors.onImage}>Start a run</Display>
+                <OverlaySub>Your route unlocks zones to claim</OverlaySub>
               </View>
-            </SceneImage>
-          </View>
-        ) : (
-          <PressScale onPress={() => router.push('/run')} style={{ marginTop: 14 }} scaleTo={0.98}>
-            <SceneImage kind="run" seed={4} height={132} scrim="strong">
-              <View style={styles.runCta}>
-                <View style={{ flex: 1 }}>
-                  <OverlayKicker>Run or walk</OverlayKicker>
-                  <Display size={30} color={colors.onImage}>Start a run</Display>
-                  <OverlaySub>Your route unlocks zones to claim</OverlaySub>
-                </View>
-                <View style={styles.playBtn}>
-                  <Icon name="play" size={30} color={colors.onPrimary} />
-                </View>
+              <View style={styles.playBtn}>
+                <Icon name="play" size={30} color={colors.onPrimary} />
               </View>
-            </SceneImage>
-          </PressScale>
-        )}
+            </View>
+          </SceneImage>
+        </PressScale>
       </FadeIn>
 
       {/* Campus today — daily activity across campus (Social service) */}

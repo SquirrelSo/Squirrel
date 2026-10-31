@@ -43,6 +43,24 @@ import {
 } from '@/logic/runTracking';
 import { uploadAndClearOnSuccess } from '@/logic/uploadLifecycle';
 import { recordedRunReason } from '@/logic/runOutcome';
+import {
+  addConnectivityListener,
+  addVisibilityListener,
+  getWebLocationPermission,
+  isWebGeolocationAvailable,
+  releaseScreenWakeLock,
+  requestScreenWakeLock,
+  requestWebLocationPermission,
+  watchWebPosition,
+  type LocationSubscription,
+  type WakeLockSentinelLike,
+} from '@/logic/webLocation';
+import {
+  NETWORK_OFFLINE_WARNING,
+  NO_GPS_FIX_WARNING,
+  TAB_BACKGROUNDED_WARNING,
+  WEB_FOREGROUND_WARNING,
+} from '@/logic/runStateMachine';
 import { useApp, type FinishRunResult } from '@/state/AppState';
 import { StatusBar } from 'expo-status-bar';
 import { alpha, colors, fonts, MAX_WIDTH, radius, statusBarStyle } from '@/theme';
@@ -52,7 +70,7 @@ const fmtPace = (secPerKm: number) => (Number.isFinite(secPerKm) && secPerKm > 0
 const fmtClock = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}:${two((s % 3600) / 60)}:${two(s % 60)}` : `${two(s / 60)}:${two(s % 60)}`);
 
 type Phase = 'setup' | 'countdown' | 'running' | 'paused' | 'uploading' | 'done';
-type Perm = 'checking' | 'undetermined' | 'granted' | 'denied' | 'blocked' | 'approximate' | 'services_off' | 'web';
+type Perm = 'checking' | 'undetermined' | 'granted' | 'denied' | 'blocked' | 'approximate' | 'services_off' | 'web' | 'unsupported';
 /** The demo route always starts from zero: 0.00 km, 0:00. */
 const DEMO_START = 0;
 
@@ -117,7 +135,7 @@ export default function Run() {
   const [kind, setKind] = useState<ActivityType>(params.type === 'walk' ? 'walk' : 'run');
   const [phase, setPhase] = useState<Phase>('setup');
   const [count, setCount] = useState(3);
-  const [perm, setPerm] = useState<Perm>(Platform.OS === 'web' ? 'web' : 'checking');
+  const [perm, setPerm] = useState<Perm>('checking');
   const [source, setSource] = useState<Source | null>(null);
   const [sec, setSec] = useState(0);
   const tracking = useSyncExternalStore(subscribeRunTracking, getRunTrackingSnapshot, getRunTrackingSnapshot);
@@ -165,6 +183,24 @@ export default function Run() {
 
   // ---- Location permission + a foreground-only fallback when background tracking is unavailable.
   const startWatch = useCallback(async () => {
+    if (Platform.OS === 'web') {
+      if (!isWebGeolocationAvailable()) {
+        setPerm('unsupported');
+        return null;
+      }
+      setPerm('granted');
+      return watchWebPosition(
+        (fix) => {
+          if (phaseRef.current === 'running' && sourceRef.current === 'gps') addRunTrackingFix(fix);
+          else noteRunLocationFix(fix);
+        },
+        (err) => {
+          if (err.code === 'permission_denied') setPerm('denied');
+          else if (err.code === 'position_unavailable') setPerm('services_off');
+          setNotice(err.message);
+        },
+      );
+    }
     try {
       if (!(await Location.hasServicesEnabledAsync())) return setPerm('services_off');
       setPerm('granted');
@@ -179,7 +215,8 @@ export default function Run() {
       return null;
     }
   }, []);
-  const watchRef = useRef<Location.LocationSubscription | null>(null);
+  const watchRef = useRef<Location.LocationSubscription | LocationSubscription | null>(null);
+  const wakeLockSentinelRef = useRef<WakeLockSentinelLike | null>(null);
   const foregroundWatchStartRef = useRef<Promise<boolean> | null>(null);
   const startForegroundFallback = useCallback(async () => {
     if (watchRef.current) return true;
@@ -237,6 +274,10 @@ export default function Run() {
     }
   }, []);
   const stopLocationSources = useCallback(async () => {
+    if (Platform.OS === 'web') {
+      await releaseScreenWakeLock(wakeLockSentinelRef.current);
+      wakeLockSentinelRef.current = null;
+    }
     await stopForegroundFallback();
     await stopBackgroundUpdates();
     endRunTracking();
@@ -265,9 +306,25 @@ export default function Run() {
     }
   }, []);
   useEffect(() => {
-    if (Platform.OS === 'web') return;
     let cancelled = false;
     (async () => {
+      if (Platform.OS === 'web') {
+        if (!isWebGeolocationAvailable()) {
+          if (!cancelled) setPerm('unsupported');
+          return;
+        }
+        try {
+          const p = await getWebLocationPermission();
+          if (cancelled) return;
+          setPerm(p);
+          if (p === 'granted') {
+            await startForegroundFallback();
+          }
+        } catch {
+          if (!cancelled) setPerm('undetermined');
+        }
+        return;
+      }
       try {
         const p = await Location.getForegroundPermissionsAsync();
         if (cancelled) return;
@@ -294,6 +351,19 @@ export default function Run() {
 
   const askPermission = async () => {
     tap();
+    if (Platform.OS === 'web') {
+      try {
+        const p = await requestWebLocationPermission();
+        setPerm(p);
+        if (p === 'granted') {
+          await startForegroundFallback();
+          setNotice(WEB_FOREGROUND_WARNING);
+        }
+      } catch {
+        setPerm('denied');
+      }
+      return;
+    }
     if (perm === 'blocked' || perm === 'approximate') return Linking.openSettings();
     const p = await Location.requestForegroundPermissionsAsync();
     if (p.status === 'granted' && isApproximate(p)) setPerm('approximate');
@@ -309,6 +379,51 @@ export default function Run() {
       }
     } else setPerm(p.canAskAgain ? 'denied' : 'blocked');
   };
+
+  // Screen Wake Lock on web while running
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (phase === 'running' && source === 'gps') {
+      void requestScreenWakeLock().then((sentinel) => {
+        wakeLockSentinelRef.current = sentinel;
+      });
+    } else {
+      void releaseScreenWakeLock(wakeLockSentinelRef.current);
+      wakeLockSentinelRef.current = null;
+    }
+  }, [phase, source]);
+
+  // Tab visibility and network listeners on web
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const unsubVis = addVisibilityListener((visible) => {
+      if (phaseRef.current === 'running' && sourceRef.current === 'gps') {
+        if (!visible) {
+          setNotice(TAB_BACKGROUNDED_WARNING);
+          wakeLockSentinelRef.current = null;
+        } else {
+          setNotice(WEB_FOREGROUND_WARNING);
+          void requestScreenWakeLock().then((sentinel) => {
+            wakeLockSentinelRef.current = sentinel;
+          });
+        }
+      }
+    });
+    const unsubConn = addConnectivityListener(
+      () => {
+        setNotice((current) => (current === NETWORK_OFFLINE_WARNING ? (phaseRef.current === 'running' && sourceRef.current === 'gps' ? WEB_FOREGROUND_WARNING : null) : current));
+      },
+      () => {
+        if (phaseRef.current === 'running' || phaseRef.current === 'paused') {
+          setNotice(NETWORK_OFFLINE_WARNING);
+        }
+      },
+    );
+    return () => {
+      unsubVis();
+      unsubConn();
+    };
+  }, []);
 
   // ---- Countdown
   useEffect(() => {
@@ -341,7 +456,7 @@ export default function Run() {
         const [lat, lon] = demoPosition(demoMeters.current);
         addRunTrackingFix({ lat, lon, t: Date.now(), accuracy: 5 });
       } else if (Date.now() - getRunTrackingSnapshot().lastFixAt > 20_000) {
-        setNotice('No GPS fix for 20 s. Head into open sky — distance only counts with a location fix.');
+        setNotice(NO_GPS_FIX_WARNING);
       }
     }, 1000);
     return () => clearInterval(id);
@@ -417,10 +532,14 @@ export default function Run() {
       setSec(src === 'demo' ? DEMO_START : 0);
       demoMeters.current = DEMO_START;
       lastKmMarker.current = 0;
-      setNotice(src === 'gps' && !backgroundReady
-        ? backgroundFailure === 'app_resume'
-          ? 'Squirrel is still returning to the foreground. Keep the app open during your run; background tracking did not start.'
-          : 'Background location is not enabled. Keep Squirrel open during your run; the route will pause when the app is backgrounded.'
+      setNotice(src === 'gps'
+        ? Platform.OS === 'web'
+          ? WEB_FOREGROUND_WARNING
+          : !backgroundReady
+            ? backgroundFailure === 'app_resume'
+              ? 'Squirrel is still returning to the foreground. Keep the app open during your run; background tracking did not start.'
+              : 'Background location is not enabled. Keep Squirrel open during your run; the route will pause when the app is backgrounded.'
+            : null
         : null);
       setCount(3);
       setPhase('countdown');
@@ -648,10 +767,10 @@ export default function Run() {
           : weak
             ? { text: `Weak GPS · ±${Math.round(accuracy)} m`, color: colors.orange }
             : { text: `GPS · ±${Math.round(accuracy)} m`, color: colors.primary }
-        : perm === 'web'
-          ? { text: 'No GPS on web', color: colors.dim }
-          : perm === 'checking'
-            ? { text: 'Checking location…', color: colors.dim }
+        : perm === 'checking'
+          ? { text: 'Checking location…', color: colors.dim }
+          : perm === 'unsupported'
+            ? { text: 'No GPS in browser', color: colors.dim }
             : { text: 'Location off', color: colors.coral };
   const title = kind === 'walk' ? (phase === 'setup' ? 'Walk' : 'Walking') : phase === 'setup' ? 'Run' : 'Running';
 
@@ -694,43 +813,55 @@ export default function Run() {
             Your route shows on the campus map as you go. Afterwards you’ll see which zones you moved through — and any you’re eligible to claim. Crossing a zone never claims it on its own.
           </Text>
           {perm === 'granted' ? (
-            <Button label={`Start ${kind}`} icon="arrow-right" onPress={() => start('gps')} style={{ marginTop: 16 }} />
+            <View style={{ marginTop: 16, gap: 10 }}>
+              <Button label={`Start ${kind}`} icon="arrow-right" onPress={() => start('gps')} />
+              {Platform.OS === 'web' && (
+                <Button label="Try demo route (simulated)" variant="secondary" size="md" onPress={() => start('demo')} />
+              )}
+            </View>
           ) : perm === 'checking' ? (
             <View style={{ marginTop: 16, alignItems: 'center' }}>
               <ActivityIndicator color={colors.primary} />
             </View>
           ) : (
             <View style={styles.permBox}>
-              <Icon name={perm === 'services_off' ? 'map-marker-off-outline' : perm === 'web' ? 'monitor' : 'map-marker-alert-outline'} size={26} color={colors.gold} />
+              <Icon name={perm === 'services_off' ? 'map-marker-off-outline' : perm === 'unsupported' ? 'monitor' : 'map-marker-alert-outline'} size={26} color={colors.gold} />
               <Text style={styles.permTitle}>
-                {perm === 'web'
-                  ? 'GPS tracking needs the phone app'
+                {perm === 'unsupported'
+                  ? 'Geolocation unavailable'
                   : perm === 'services_off'
-                    ? 'Location services are off'
+                    ? 'Location services are off or unavailable'
                     : perm === 'approximate'
                       ? 'Precise location required'
                       : perm === 'undetermined'
                         ? 'Squirrel needs your location'
-                        : 'Location required'}
+                        : 'Location permission denied'}
               </Text>
               <Text style={styles.setupText}>
-                {perm === 'web'
-                  ? 'The web preview can’t read GPS. You can try a demo route instead — it’s clearly marked and never counts as a real activity.'
+                {perm === 'unsupported'
+                  ? 'This browser does not support location tracking. You can try a demo route instead — it’s clearly marked and never counts as a real activity.'
                   : perm === 'services_off'
-                    ? 'Turn on location in your phone settings, then come back.'
+                    ? Platform.OS === 'web'
+                      ? 'Turn on location services in your device and browser settings, then try again.'
+                      : 'Turn on location in your phone settings, then come back.'
                     : perm === 'approximate'
                       ? 'Approximate location can’t record a reliable route. Switch Squirrel to Precise location in Settings.'
                       : perm === 'undetermined'
                         ? 'We use it only while you record, to draw your route and check which zones you moved through. Other people never see your location.'
-                        : 'Turn on location permission to track your run.'}
+                        : Platform.OS === 'web'
+                          ? 'Allow location access in your browser site settings, then tap Ask again.'
+                          : 'Turn on location permission to track your run.'}
               </Text>
               {perm === 'undetermined' && <Button label="Allow location" iconLeft="crosshairs-gps" size="md" onPress={askPermission} style={{ alignSelf: 'stretch', marginTop: 10 }} />}
-              {(perm === 'denied' || perm === 'blocked' || perm === 'approximate' || perm === 'services_off') && (
+              {Platform.OS !== 'web' && (perm === 'denied' || perm === 'blocked' || perm === 'approximate' || perm === 'services_off') && (
                 <Button label="Open settings" iconLeft="cog-outline" size="md" onPress={() => void Linking.openSettings()} style={{ alignSelf: 'stretch', marginTop: 10 }} />
               )}
-              {perm === 'denied' && <Button label="Ask again" variant="ghost" size="md" onPress={askPermission} style={{ alignSelf: 'stretch', marginTop: 6 }} />}
-              {/* The labelled demo is only offered where GPS can't exist (the web preview). */}
-              {perm === 'web' && <Button label="Try a demo route" variant="secondary" size="md" onPress={() => start('demo')} style={{ alignSelf: 'stretch', marginTop: 8 }} />}
+              {(perm === 'denied' || perm === 'blocked' || perm === 'services_off') && (
+                <Button label="Ask again" variant="ghost" size="md" onPress={askPermission} style={{ alignSelf: 'stretch', marginTop: 6 }} />
+              )}
+              {Platform.OS === 'web' && (
+                <Button label="Try demo route (simulated)" variant="secondary" size="md" onPress={() => start('demo')} style={{ alignSelf: 'stretch', marginTop: 8 }} />
+              )}
             </View>
           )}
         </ScrollView>

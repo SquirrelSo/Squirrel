@@ -387,7 +387,7 @@ function NextAction({ icon, title, sub, cta, onPress }: { icon: React.ComponentP
           <Text style={styles.sub}>{sub}</Text>
         </View>
       </View>
-      {Platform.OS === 'web' && (cta === 'Start a run' || cta === 'Start exercise') ? (
+      {Platform.OS === 'web' && cta === 'Start exercise' ? (
         <View style={{ marginTop: 14, paddingVertical: 10, paddingHorizontal: 16, borderRadius: radius.md, backgroundColor: colors.cardHi, borderWidth: 1, borderColor: colors.line, alignItems: 'center' }}>
           <Text style={{ color: colors.dim, fontFamily: fonts.labelBold, fontSize: 13, letterSpacing: 0.8, textTransform: 'uppercase' }}>Available in the app</Text>
         </View>

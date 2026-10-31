@@ -187,3 +187,47 @@ curl -sSL "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_
 For Phase (c) builds only, add:
 - PowerShell: `$env:EXPO_PUBLIC_POSE_ASSETS_URL = "/pose"`
 - Bash: `export EXPO_PUBLIC_POSE_ASSETS_URL="/pose"`
+
+---
+
+## 5. Manual Test Plan: Real GPS Runs on Web (Chrome DevTools Sensors)
+
+Use Chrome DevTools to verify browser-native GPS tracking, permissions, wake lock, tab visibility warnings, and upload handling.
+
+### Prerequisites & Setup
+1. Open the hosted web app (`https://www.squirrelsocial.life`) or local web export in Google Chrome.
+2. Open DevTools (`F12` or `Ctrl+Shift+I` on Windows/Linux; `Cmd+Option+I` on macOS).
+3. Press `Esc` to open the drawer panel, click **More tools** (`⋮`), and select **Sensors**.
+
+### Test Case 1: Geolocation Permission Flow & Demo Route
+1. In site settings (lock icon in URL bar), set **Location** to **Ask** or **Block**.
+2. Navigate to **Start a run** from Home, Create sheet, or `/run`.
+3. If blocked/denied:
+   - Confirm the banner displays **Location permission denied** with browser instructions.
+   - Confirm **Try demo route (simulated)** is available and starts the non-counted simulation.
+4. Set Location to **Allow** and tap **Ask again**:
+   - Confirm status transitions to **GPS · searching** / **GPS · ±X m**.
+   - Confirm **Start Run** and **Start Walk** buttons become active.
+
+### Test Case 2: Live Movement Emulation
+1. In the **Sensors** drawer under **Location**, select **Custom location** (e.g. Latitude `22.9550`, Longitude `88.5450`).
+2. Tap **Start Run** and wait for the 3.. 2.. 1.. countdown.
+3. Confirm the foreground reminder appears:
+   > *"Keep this tab open and in front. Web GPS pauses if the tab is hidden or minimized."*
+4. Simulate movement by updating latitude every 2–3 seconds (e.g. `22.9552`, `22.9555`, `22.9558`).
+5. Confirm distance (KM) increments, moving pace calculates, and points draw on the map.
+
+### Test Case 3: Tab Backgrounding & Screen Wake Lock
+1. While the run is active, open a new browser tab or minimize Chrome.
+2. Wait 5 seconds, then switch back to the Squirrel tab.
+3. Confirm the background warning banner appears:
+   > *"Tab was backgrounded. Tracking may pause or drop points when the tab is hidden — keep Squirrel in front."*
+4. Confirm tracking resumes and Screen Wake Lock is re-engaged.
+
+### Test Case 4: Network Disconnection & Recovery
+1. In DevTools **Network** tab, switch throttling to **Offline**.
+2. Confirm the offline banner displays:
+   > *"You appear to be offline. Your route is tracked locally and will upload when connection is restored."*
+3. Switch throttling back to **No throttling** (Online).
+4. Long-press to finish the run; confirm points upload to the Run Module with their idempotency key and zones are verified.
+

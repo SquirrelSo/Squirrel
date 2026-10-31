@@ -108,7 +108,7 @@ export function EmptyNote({ icon = 'emoticon-cool-outline', title, body, action,
       <Icon name={icon} size={28} color={colors.dim} />
       <Text style={styles.title}>{title}</Text>
       {body ? <Text style={styles.body}>{body}</Text> : null}
-      {Platform.OS === 'web' && (action === 'Start a run' || action === 'Start exercise') ? (
+      {Platform.OS === 'web' && action === 'Start exercise' ? (
         <View style={{ marginTop: 8, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.pill, backgroundColor: colors.cardHi, borderWidth: 1, borderColor: colors.line }}>
           <Text style={{ color: colors.dim, fontFamily: fonts.label, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' }}>Available in the app</Text>
         </View>
