@@ -163,7 +163,18 @@ For browser pose tracking without runtime third-party CDN dependencies, MediaPip
 - WASM binaries: `/pose/wasm/vision_wasm_internal.*` and `vision_wasm_nosimd_internal.*`
 - Same-origin tracker entrypoint: `/pose/tracker.html` loading `/pose/tracker.js` (no inline scripts, strictly compliant with CSP `script-src 'self' 'wasm-unsafe-eval'`).
 
-When executing `prepare-deploy.ps1`, the script automatically stages these assets into `dist/pose/` and `$DeployDir/pose/`, asserting that no directory named `node_modules` exists in the deployed output (Vercel skips all folders named `node_modules`).
+**Source of Truth**:
+`mobile-4/public/pose/` is the canonical tracked source of truth in git. Expo exports static files from `public/` into `dist/` and serves them during local dev. `prepare-deploy.ps1` ensures `dist/pose` and any deployment directory have the latest tracker files. `mobile-4/web-hosting/pose/` is a local mirror ignored by git so tracker files are never committed twice.
+
+**Integrity Verification**:
+`prepare-deploy.ps1` validates exact SHA-256 checksums for each MediaPipe binary and model file on staging. If an asset is missing, it fetches the pinned package version (`@mediapipe/tasks-vision@0.10.35` from jsDelivr, model bundle v1 from Google Cloud Storage) and validates its SHA-256 before allowing deployment.
+
+**Vercel Header & Caching Policy**:
+- **Framing & CSP**: The general security header rule uses negative lookahead (`/((?!pose/tracker\.html$).*)`) to send `X-Frame-Options: DENY` and `frame-ancestors 'none'` on all application routes. Only `/pose/tracker.html` is excluded from this general rule and configured with `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'`, allowing the web pose screen to embed its tracker iframe same-origin while keeping all other pages clickjack-protected.
+- **Cache-Control**:
+  - `/pose/tracker.html` and `/pose/tracker.js`: `no-cache` (immediate revalidation).
+  - `/pose/wasm/*`, `/pose/vision_bundle.mjs`, `/pose/pose_landmarker_lite.task`: `public, max-age=86400` (1 day).
+  - `/_expo/static/*` and `/assets/*`: `public, max-age=31536000, immutable` (fingerprinted/hashed bundles only).
 
 Set the environment variable before building:
 - PowerShell: `$env:EXPO_PUBLIC_POSE_ASSETS_URL = "/pose"`

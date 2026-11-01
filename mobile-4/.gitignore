@@ -42,3 +42,6 @@ yarn-error.*
 
 # backend config
 .env
+
+# generated web hosting mirrors
+web-hosting/pose/

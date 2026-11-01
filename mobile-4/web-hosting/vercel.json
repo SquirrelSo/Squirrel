@@ -12,7 +12,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: data: https://squirrel-exercise-production.up.railway.app wss://squirrel-exercise-production.up.railway.app; worker-src 'self' blob:; frame-ancestors 'self'; object-src 'none'; base-uri 'self';"
+          "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' blob: data: https://squirrel-exercise-production.up.railway.app wss://squirrel-exercise-production.up.railway.app https://squirrel-run-api-production.up.railway.app https://squirrel-social-production.up.railway.app https://squirrel-campus-production.up.railway.app wss://squirrel-campus-production.up.railway.app https://egtooqnjepgsmirnqgsj.supabase.co; frame-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'; object-src 'none'; base-uri 'self';"
         },
         {
           "key": "X-Content-Type-Options",
@@ -32,12 +32,12 @@
         },
         {
           "key": "Cache-Control",
-          "value": "public, max-age=0, must-revalidate"
+          "value": "no-cache"
         }
       ]
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!pose/tracker\\.html$).*)",
       "headers": [
         {
           "key": "Content-Security-Policy",
@@ -80,11 +80,38 @@
       ]
     },
     {
-      "source": "/pose/(.*)",
+      "source": "/pose/tracker.js",
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "source": "/pose/wasm/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=86400"
+        }
+      ]
+    },
+    {
+      "source": "/pose/vision_bundle.mjs",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=86400"
+        }
+      ]
+    },
+    {
+      "source": "/pose/pose_landmarker_lite.task",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=86400"
         }
       ]
     },
