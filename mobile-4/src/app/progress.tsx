@@ -387,13 +387,7 @@ function NextAction({ icon, title, sub, cta, onPress }: { icon: React.ComponentP
           <Text style={styles.sub}>{sub}</Text>
         </View>
       </View>
-      {Platform.OS === 'web' && cta === 'Start exercise' ? (
-        <View style={{ marginTop: 14, paddingVertical: 10, paddingHorizontal: 16, borderRadius: radius.md, backgroundColor: colors.cardHi, borderWidth: 1, borderColor: colors.line, alignItems: 'center' }}>
-          <Text style={{ color: colors.dim, fontFamily: fonts.labelBold, fontSize: 13, letterSpacing: 0.8, textTransform: 'uppercase' }}>Available in the app</Text>
-        </View>
-      ) : (
-        <Button label={cta} icon="arrow-right" size="md" onPress={onPress} style={{ marginTop: 14 }} />
-      )}
+      <Button label={cta} icon="arrow-right" size="md" onPress={onPress} style={{ marginTop: 14 }} />
     </View>
   );
 }

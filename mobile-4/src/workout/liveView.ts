@@ -81,6 +81,7 @@ export function liveView(s: CoachState | null, tracker: TrackerStatus, targetRep
   if (s.phase === 'done') return { ...base, status: 'Workout done' };
 
   // training
+  if (!s.connected) return { ...base, status: 'Reconnecting to your coach…', skeleton: 'white' };
   const t = s.train;
   if (!t) return { ...base, status: 'Go!', skeleton: 'green' };
   if (isTimed(t)) {

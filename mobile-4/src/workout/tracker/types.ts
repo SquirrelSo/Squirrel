@@ -2,7 +2,7 @@ import type { StyleProp, ViewStyle } from 'react-native';
 import type { PoseFrame } from '@/workout/coach';
 import type { TrackerMessage } from './trackerHtml';
 
-export type TrackerStatus = 'loading' | 'ready' | 'denied' | 'error';
+export type TrackerStatus = 'loading' | 'ready' | 'denied' | 'error' | 'no_camera';
 
 export type PoseCameraProps = {
   /** Track and send frames (false while resting or done, to save battery). */

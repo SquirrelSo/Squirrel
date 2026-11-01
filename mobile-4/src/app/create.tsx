@@ -22,8 +22,7 @@ const ALL_ACTIONS: Action[] = [
 const ACTIONS: Action[] = (Platform.OS as string) === 'web' ? ALL_ACTIONS.filter((a) => a.go !== '/alarm') : ALL_ACTIONS;
 
 const lockedAction = (a: Action) => !!a.locked && isLocked(a.locked);
-const isWeb = Platform.OS === 'web';
-const isAppOnly = (a: Action) => isWeb && a.go === '/exercise/select';
+const isAppOnly = (_a: Action) => false;
 
 /** Central CREATE action sheet. Every action opens a real flow; nothing here logs fake progress. */
 export default function Create() {

@@ -25,6 +25,8 @@ import { PoseCamera } from '@/workout/tracker/PoseCamera';
 import { PoseDebugOverlay } from '@/workout/PoseDebugOverlay';
 import { getReadyText } from '@/workout/exerciseProfiles';
 import type { TrackerStatus } from '@/workout/tracker/types';
+import { addTabVisibilityListener } from '@/logic/webPose';
+import { requestScreenWakeLock, releaseScreenWakeLock } from '@/logic/webLocation';
 
 /**
  * WORKOUT. Signed in to the coach: a LIVE workout. The phone tracks the body on-device
@@ -322,6 +324,7 @@ function LiveWorkout({ userId }: { userId: string }) {
   const [state, setState] = useState<CoachState | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [tabHiddenWarning, setTabHiddenWarning] = useState(false);
   const coach = useRef<CoachSession | null>(null);
   const { beginExercise, endExercise, completeExercise, syncServerXp } = useApp();
   // XP is the server's (2 per counted rep): the total before the workout, to show what it earned.
@@ -431,6 +434,22 @@ function LiveWorkout({ userId }: { userId: string }) {
     return () => clearInterval(id);
   }, [phase, paused]);
 
+  // On web: auto-pause if tab is hidden/backgrounded, warn user to keep tab in front
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    return addTabVisibilityListener({
+      onHidden: () => {
+        if (phase === 'training' && !paused) {
+          coach.current?.pause();
+          setTabHiddenWarning(true);
+        }
+      },
+      onVisible: () => {
+        // Tab restored to front
+      },
+    });
+  }, [phase, paused]);
+
   const onFrame = useCallback((f: PoseFrame) => coach.current?.frame(f), []);
   const onStatus = useCallback((status: TrackerStatus, detail?: string) => setTracker({ status, detail }), []);
   const readDebug = useCallback(() => coach.current?.debug() ?? null, []);
@@ -449,6 +468,15 @@ function LiveWorkout({ userId }: { userId: string }) {
   const scored = results.filter((r) => r.score != null);
   const avgScore = scored.length ? Math.round(scored.reduce((a, r) => a + (r.score ?? 0), 0) / scored.length) : null;
   const trackingOn = !done && phase !== 'rest';
+
+  // On web: request screen wake lock while tracking is active
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !trackingOn || paused) return;
+    const lockPromise = requestScreenWakeLock();
+    return () => {
+      lockPromise.then((sentinel) => releaseScreenWakeLock(sentinel));
+    };
+  }, [trackingOn, paused]);
 
   // Finished: missions and today's activity, once. An empty workout records nothing.
   const recorded = useRef(false);
@@ -520,6 +548,11 @@ function LiveWorkout({ userId }: { userId: string }) {
           <View style={[styles.demoDot, view.skeleton === 'red' && { backgroundColor: colors.coral }]} />
           <Text style={styles.demoText} numberOfLines={1}>{view.status}</Text>
         </View>
+        {tabHiddenWarning && (
+          <View style={styles.tabBanner}>
+            <Text style={styles.tabBannerText}>Workout was paused while this tab was in the background. Tap Resume to continue.</Text>
+          </View>
+        )}
 
         <View style={{ flex: 1 }} />
 
@@ -541,7 +574,15 @@ function LiveWorkout({ userId }: { userId: string }) {
 
         <View style={[styles.controls, { justifyContent: 'center' }]}>
           <Pressable
-            onPress={() => { tap('impact'); if (paused) coach.current?.resume(); else coach.current?.pause(); }}
+            onPress={() => {
+              tap('impact');
+              if (paused) {
+                setTabHiddenWarning(false);
+                coach.current?.resume();
+              } else {
+                coach.current?.pause();
+              }
+            }}
             disabled={phase !== 'training'}
             style={[styles.pauseRing, phase !== 'training' && { opacity: 0.4 }]}
             accessibilityLabel={paused ? 'Resume' : 'Pause'}>
@@ -564,11 +605,23 @@ function LiveWorkout({ userId }: { userId: string }) {
           <Button label="Back" variant="secondary" size="md" onPress={() => router.back()} style={{ marginTop: 10, alignSelf: 'stretch' }} />
         </View>
       )}
-      {!blocking && (tracker.status === 'error' || tracker.status === 'denied') && (
+      {!blocking && (tracker.status === 'error' || tracker.status === 'denied' || tracker.status === 'no_camera') && (
         <View style={styles.overlay}>
           <Icon name="alert-circle-outline" size={40} color={colors.coral} />
-          <Display size={28} style={{ marginTop: 8, textAlign: 'center' }}>{tracker.status === 'denied' ? 'Camera blocked' : 'Tracking didn’t start'}</Display>
-          <Text style={styles.overlaySub}>{tracker.status === 'denied' ? 'Allow camera access for Squirrel Social, then try again.' : 'Body tracking needs an internet connection the first time it loads.'}</Text>
+          <Display size={28} style={{ marginTop: 8, textAlign: 'center' }}>
+            {tracker.status === 'denied' ? 'Camera blocked' : tracker.status === 'no_camera' ? 'No camera found' : 'Tracking didn’t start'}
+          </Display>
+          <Text style={styles.overlaySub}>
+            {tracker.status === 'denied'
+              ? (Platform.OS === 'web'
+                  ? 'Camera permission was denied in your browser. Click the camera icon in your address bar to allow access, then tap Try again.'
+                  : 'Allow camera access for Squirrel Social, then try again.')
+              : tracker.status === 'no_camera'
+                ? 'No video camera was detected on this device. Please connect a webcam or switch to a device with a camera.'
+                : (tracker.detail ?? (Platform.OS === 'web'
+                    ? 'Body tracking requires WebGL hardware acceleration and the pose model.'
+                    : 'Body tracking needs an internet connection the first time it loads.'))}
+          </Text>
           <Button label="Try again" icon="refresh" onPress={() => { setTracker({ status: 'loading' }); setTrackerKey((k) => k + 1); }} style={{ marginTop: 20, alignSelf: 'stretch' }} />
           <Button label="Back" variant="secondary" size="md" onPress={() => router.back()} style={{ marginTop: 10, alignSelf: 'stretch' }} />
         </View>
@@ -607,7 +660,7 @@ function LiveWorkout({ userId }: { userId: string }) {
         <View style={styles.overlay}>
           <Display size={48}>{confirmEnd ? 'End workout?' : 'Paused'}</Display>
           <Text style={styles.overlaySub}>{totalCount} {timed ? 'lifts' : 'reps'} saved so far · {mmss(elapsed)}</Text>
-          <Button label={confirmEnd ? 'Keep going' : 'Resume'} icon="play" onPress={() => { setConfirmEnd(false); coach.current?.resume(); }} style={{ marginTop: 22, alignSelf: 'stretch' }} />
+          <Button label={confirmEnd ? 'Keep going' : 'Resume'} icon="play" onPress={() => { setConfirmEnd(false); setTabHiddenWarning(false); coach.current?.resume(); }} style={{ marginTop: 22, alignSelf: 'stretch' }} />
           <Button label="End workout" variant="secondary" size="md" onPress={() => { setConfirmEnd(false); coach.current?.end(); }} style={{ marginTop: 10, alignSelf: 'stretch' }} />
         </View>
       )}
@@ -690,4 +743,6 @@ const styles = StyleSheet.create({
   overlaySub: { color: colors.sub, fontFamily: fonts.medium, fontSize: 15, marginTop: 6, textAlign: 'center' },
   getReady: { position: 'absolute', left: 20, right: 20, alignItems: 'center', paddingVertical: 12, paddingHorizontal: 18, borderRadius: 20, backgroundColor: 'rgba(6,6,6,0.62)' },
   getReadySub: { color: colors.text, fontFamily: fonts.medium, fontSize: 13, marginTop: 2, textAlign: 'center' },
+  tabBanner: { marginTop: 8, backgroundColor: 'rgba(255, 75, 75, 0.92)', paddingVertical: 8, paddingHorizontal: 14, borderRadius: radius.md, alignSelf: 'stretch', alignItems: 'center' },
+  tabBannerText: { color: '#fff', fontFamily: fonts.medium, fontSize: 12, textAlign: 'center' },
 });

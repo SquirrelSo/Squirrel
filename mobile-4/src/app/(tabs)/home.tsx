@@ -192,22 +192,6 @@ function StartExercise() {
     activeExercise
       ? router.push({ pathname: '/exercise/train/[key]', params: { key: activeExercise.key, session: activeExercise.sessionId ?? '' } })
       : router.push('/exercise/select');
-  if (Platform.OS === 'web') {
-    return (
-      <View style={[styles.exRow, { opacity: 0.8 }]} accessibilityLabel="Start Exercise, available in the app">
-        <View style={[styles.exIcon, { backgroundColor: colors.cardHi }]}>
-          <Icon name="arm-flex" size={22} color={colors.dim} />
-        </View>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <RowTitle style={{ color: colors.dim }}>Start Exercise</RowTitle>
-          <RowSub>Available in the app</RowSub>
-        </View>
-        <View style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.pill, backgroundColor: colors.cardHi, borderWidth: 1, borderColor: colors.line }}>
-          <Text style={{ color: colors.dim, fontFamily: fonts.label, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' }}>In app</Text>
-        </View>
-      </View>
-    );
-  }
   return (
     <PressScale onPress={open} scaleTo={0.985} style={styles.exRow} accessibilityLabel={activeName ? `Resume ${activeName}` : 'Start Exercise'}>
       <View style={styles.exIcon}>

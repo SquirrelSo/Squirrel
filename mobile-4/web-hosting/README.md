@@ -153,40 +153,32 @@ vercel deploy --prod --yes --token "$env:VERCEL_TOKEN"
 
 ---
 
-## 4. Phase (c) Only: Self-Hosting Pose Assets
+## 4. Phase (c): Self-Hosting Pose Assets & WebSocket Architecture
 
-> [!NOTE]
-> Do NOT set `EXPO_PUBLIC_POSE_ASSETS_URL` during Phase (a) or Phase (b). Pose coach assets are only needed when shipping the browser-native camera coach in Phase (c).
+### Self-Hosting MediaPipe & Tracker
+For browser pose tracking without runtime third-party CDN dependencies, MediaPipe Tasks Vision (`v0.10.35`), WASM binaries, and the lite model are served same-origin under `/pose/`:
 
-When Phase (c) is activated, download MediaPipe Tasks Vision (v0.10.35) into `dist/pose/` before copying to `web-deploy`:
+- Model bundle: `/pose/pose_landmarker_lite.task`
+- MediaPipe bundle: `/pose/vision_bundle.mjs`
+- WASM binaries: `/pose/wasm/vision_wasm_internal.*` and `vision_wasm_nosimd_internal.*`
+- Same-origin tracker entrypoint: `/pose/tracker.html` loading `/pose/tracker.js` (no inline scripts, strictly compliant with CSP `script-src 'self' 'wasm-unsafe-eval'`).
 
-### Windows PowerShell 5.1
-```powershell
-New-Item -ItemType Directory -Force -Path dist/pose/wasm
+When executing `prepare-deploy.ps1`, the script automatically stages these assets into `dist/pose/` and `$DeployDir/pose/`, asserting that no directory named `node_modules` exists in the deployed output (Vercel skips all folders named `node_modules`).
 
-Invoke-WebRequest -Uri "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs" -OutFile "dist/pose/vision_bundle.mjs"
-Invoke-WebRequest -Uri "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm/vision_wasm_internal.js" -OutFile "dist/pose/wasm/vision_wasm_internal.js"
-Invoke-WebRequest -Uri "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm/vision_wasm_internal.wasm" -OutFile "dist/pose/wasm/vision_wasm_internal.wasm"
-Invoke-WebRequest -Uri "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm/vision_wasm_nosimd_internal.js" -OutFile "dist/pose/wasm/vision_wasm_nosimd_internal.js"
-Invoke-WebRequest -Uri "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm/vision_wasm_nosimd_internal.wasm" -OutFile "dist/pose/wasm/vision_wasm_nosimd_internal.wasm"
-Invoke-WebRequest -Uri "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task" -OutFile "dist/pose/pose_landmarker_lite.task"
-```
-
-### Linux / macOS Bash
-```bash
-mkdir -p dist/pose/wasm
-
-curl -sSL "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs" -o dist/pose/vision_bundle.mjs
-curl -sSL "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm/vision_wasm_internal.js" -o dist/pose/wasm/vision_wasm_internal.js
-curl -sSL "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm/vision_wasm_internal.wasm" -o dist/pose/wasm/vision_wasm_internal.wasm
-curl -sSL "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm/vision_wasm_nosimd_internal.js" -o dist/pose/wasm/vision_wasm_nosimd_internal.js
-curl -sSL "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm/vision_wasm_nosimd_internal.wasm" -o dist/pose/wasm/vision_wasm_nosimd_internal.wasm
-curl -sSL "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task" -o dist/pose/pose_landmarker_lite.task
-```
-
-For Phase (c) builds only, add:
+Set the environment variable before building:
 - PowerShell: `$env:EXPO_PUBLIC_POSE_ASSETS_URL = "/pose"`
 - Bash: `export EXPO_PUBLIC_POSE_ASSETS_URL="/pose"`
+
+### WebSocket Origin & CORS Verification
+1. **WebSocket Endpoints (`/ws/setup`, `/ws/train`)**:
+   - The Exercise Mechanics FastAPI backend does **NOT** validate the `Origin` header on incoming WebSocket handshakes. Starlette's `CORSMiddleware` applies exclusively to HTTP requests. The WebSocket routes immediately accept the connection and authenticate the caller via the `?token=` query parameter (`verify_access_token(token)`).
+2. **REST Endpoints (`/api/exercises`, `/api/users/{id}/sessions`)**:
+   - HTTP REST calls from the web browser are subject to browser CORS preflight.
+   - The environment variable that controls accepted browser origins on the Exercise Mechanics Railway deployment is:
+     `CORS_ALLOWED_ORIGINS`
+   - If deploying to `https://squirrel-social-web.vercel.app`, ensure the Railway service environment variable `CORS_ALLOWED_ORIGINS` includes:
+     `https://squirrel-social-web.vercel.app,https://www.squirrelsocial.life` (or a wildcard such as `https://squirrel-*-web.vercel.app`).
+
 
 ---
 
@@ -230,4 +222,77 @@ Use Chrome DevTools to verify browser-native GPS tracking, permissions, wake loc
    > *"You appear to be offline. Your route is tracked locally and will upload when connection is restored."*
 3. Switch throttling back to **No throttling** (Online).
 4. Long-press to finish the run; confirm points upload to the Run Module with their idempotency key and zones are verified.
+
+---
+
+## 6. Manual Test Plan: Browser Pose Coach ("Start exercise")
+
+Use Google Chrome or Safari to test the browser-native camera pose coach, MediaPipe WASM model execution, WebSocket coaching stream, tab backgrounding pause, and hardware error states.
+
+### Prerequisites & Setup
+1. Use an HTTPS origin (`https://www.squirrelsocial.life` or `https://squirrel-social-web.vercel.app`) or `http://localhost:*` (where `getUserMedia` is permitted).
+2. Ensure a webcam or laptop camera is connected and hardware acceleration is enabled in Chrome settings (`chrome://settings/system`).
+
+### Test Case 1: Camera Permission Flow
+1. In site settings (lock icon in URL bar), set **Camera** to **Block**.
+2. Navigate to **Start exercise** from Home or the Create action sheet (`/exercise/select`).
+3. Select an exercise (e.g. **Squat**).
+4. Verify the camera blocked overlay appears:
+   - Header: **Camera blocked**
+   - Subtext: *"Camera permission was denied in your browser. Click the camera icon in your address bar to allow access, then tap Try again."*
+   - Tap **Back** returns to the exercise selection screen.
+5. In site settings, change Camera to **Allow**, return to the tab, and tap **Try again**.
+6. Verify the video stream starts and the camera mirror view renders cleanly.
+
+### Test Case 2: MediaPipe WASM & Model Loading
+1. Verify the tracker initializes without errors:
+   - Initial status displays: *"Starting body tracking…"*.
+   - Once loaded, transitions to: *"Step into view"*.
+2. Open DevTools **Network** tab:
+   - Verify requests for `/pose/vision_bundle.mjs`, `/pose/wasm/vision_wasm_internal.*`, and `/pose/pose_landmarker_lite.task` all load with HTTP `200` status from same-origin `/pose/` (no requests to `cdn.jsdelivr.net` or external CDNs).
+   - In DevTools **Console**, confirm no CSP violations or `EvalError`/`unsafe-inline` warnings appear.
+
+### Test Case 3: Framing, Lighting & Body Detection
+1. Step out of the camera's view completely:
+   - Confirm status pill displays: *"Step into view"*.
+   - Skeleton indicator renders neutral white/empty.
+2. Step into view and step back until head, shoulders, hips, knees, and ankles are visible:
+   - Confirm framing status changes to: *"Get into your starting position"* / *"Hold still…"*.
+   - Skeleton renders green overlaid on your limbs.
+3. Dim the room lights or obstruct the camera lens:
+   - When no landmarks are detected for > 1 second, confirm status warns:
+     > *"No body detected · check room lighting or step into view"*
+
+### Test Case 4: WebSocket Coaching Stream & Rep Counting
+1. Ensure the user is signed in.
+2. Complete the setup hold until the server approves baseline (`"Ready!"` -> `"Go!"`).
+3. Confirm connection transitions to `/ws/train` over `wss://squirrel-exercise-production.up.railway.app`.
+4. Perform 3 squats:
+   - Verify rep count increments to 1, 2, 3 with audible/haptic feedback.
+   - Verify the progress ring fills and real-time form cues appear in the cue banner.
+
+### Test Case 5: Tab Backgrounding & Screen Wake Lock
+1. While actively in the training phase, switch to a different browser tab.
+2. Confirm the workout automatically pauses:
+   - Tracking pauses to conserve CPU/battery.
+   - Screen wake lock sentinel is cleanly released.
+3. Switch back to the Squirrel workout tab:
+   - Confirm the warning banner appears:
+     > *"Workout was paused while this tab was in the background. Keep this tab in front to continue coaching."*
+   - Tap **Resume** to resume the set and re-engage the screen wake lock.
+
+### Test Case 6: WebSocket Drop & Reconnection
+1. In DevTools **Network** tab, switch throttling to **Offline** for 3 seconds while in a workout.
+2. Confirm the status pill displays:
+   > *"Reconnecting to your coach…"*
+3. Restore network to **Online**:
+   - Confirm the WebSocket automatically reconnects, re-subscribes, and live coaching resumes.
+
+### Test Case 7: Unsupported Browser / Missing Hardware Acceleration
+1. To simulate a missing WebGL environment, launch Chrome with `--disable-webgl` or disable hardware acceleration in `chrome://settings/system`.
+2. Navigate to an exercise workout:
+   - Confirm the error overlay displays:
+     > *"Hardware graphics acceleration (WebGL) is disabled or unsupported. Please enable hardware acceleration in your browser settings."*
+   - Verify the app does not crash and provides clear instructions to enable hardware acceleration.
+
 
